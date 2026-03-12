@@ -1,4 +1,4 @@
-import telebot # በትንሽ i መሆኑን አረጋግጥ
+import telebot
 from supabase import create_client, Client
 import re
 import http.server
@@ -6,7 +6,7 @@ import socketserver
 import threading
 import os
 
-# --- 1. RENDER PORT TRICK ---
+# --- 1. RENDER PORT TRICK (ሬንደር እንዳያጠፋው) ---
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
     handler = http.server.SimpleHTTPRequestHandler
@@ -28,7 +28,7 @@ supabase: Client = create_client(SB_URL, SB_KEY)
 current_bet_price = 20 
 pending_payments = {}
 
-# --- 3. COMMAND HANDLERS (ከላይ መሆን አለባቸው) ---
+# --- 3. COMMAND HANDLERS ---
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -49,7 +49,21 @@ def set_price(message):
         except:
             bot.reply_to(message, "ስህተት፡ ቁጥር ብቻ ያስገቡ።")
 
-# --- 4. MESSAGE HANDLER (ሁሉንም ጽሁፎች የሚቀበለው መጨረሻ ላይ) ---
+@bot.message_handler(commands=['reset_game'])
+def reset_game(message):
+    if message.from_user.id == ADMIN_ID:
+        try:
+            # ሁሉንም ቁጥሮች ነፃ ማድረግ
+            supabase.table("bingo_slots").update({"player_name": None, "is_booked": False}).neq("slot_number", 0).execute()
+            # ያገለገሉ ደረሰኞችን ማጽዳት
+            supabase.table("used_transactions").delete().neq("transaction_id", "IS_EMPTY").execute()
+            bot.reply_to(message, "♻️ ጨዋታው በስኬት ታድሷል! ሁሉም ቁጥሮች አሁን ነፃ ናቸው።")
+        except Exception as e:
+            bot.reply_to(message, f"⚠️ ስህተት ተፈጠረ፡ {str(e)}")
+    else:
+        bot.reply_to(message, "❌ ይህ ትዕዛዝ ለአስተዳዳሪ ብቻ የተፈቀደ ነው።")
+
+# --- 4. MAIN MESSAGE HANDLER ---
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -76,32 +90,35 @@ def handle_all_messages(message):
     
     if is_bank_msg:
         amount_match = re.search(r'(?:ETB|ብር)\s*(\d+(?:\.\d+)?)', text, re.IGNORECASE)
-        tid_match = re.search(r'transaction number is ([A-Z0-9]+)', text, re.IGNORECASE)
-        is_correct_receiver = "1356" in text 
+        tid_match = re.search(r'(?:transaction number is|transaction id is|Trx ID:)\s*([A-Z0-9]+)', text, re.IGNORECASE)
+        is_correct_receiver = "1356" in text # የእርስዎ ስልክ ቁጥር ማረጋገጫ
 
         if amount_match and tid_match and is_correct_receiver:
             amount = float(amount_match.group(1))
             tid = tid_match.group(1)
 
             try:
+                # ደረሰኙ ቀድሞ ጥቅም ላይ መዋሉን ቼክ ማድረግ
                 check_tid = supabase.table("used_transactions").select("transaction_id").eq("transaction_id", tid).execute()
                 if check_tid.data:
                     bot.reply_to(message, "❌ ይህ ደረሰኝ ቀደም ብሎ ጥቅም ላይ ውሏል!")
                     return
 
                 if amount >= current_bet_price:
+                    # አዲስ ትራንዛክሽን ከሆነ መመዝገብ
                     supabase.table("used_transactions").insert({"transaction_id": tid}).execute()
+                    
                     slots_count = int(amount // current_bet_price)
                     pending_payments[user_id] = {
                         "name": message.from_user.first_name,
                         "slots_left": slots_count,
                         "chosen_numbers": []
                     }
-                    bot.reply_to(message, f"✅ የ {amount} ብር ክፍያ ተረጋግጧል!\n🎯 ለ {slots_count} ቁጥር ይበቃዎታል።\n\nእባክዎ የሚፈልጉትን ቁጥር አሁን ይላኩ።")
+                    bot.reply_to(message, f"✅ የ {amount} ብር ክፍያ ተረጋግጧል! (ID: {tid})\n🎯 ለ {slots_count} ቁጥር ይበቃዎታል።\n\nእባክዎ የሚፈልጉትን ቁጥር አሁን ይላኩ።")
                 else:
                     bot.reply_to(message, f"⚠️ መደቡ {current_bet_price} ብር ነው። የላኩት ግን {amount} ብር ነው።")
-            except:
-                bot.reply_to(message, "⚠️ የዳታቤዝ ግንኙነት ስህተት።")
+            except Exception:
+                bot.reply_to(message, "⚠️ የዳታቤዝ ስህተት አጋጥሟል።")
         elif is_bank_msg and not is_correct_receiver:
             bot.reply_to(message, "❌ ስህተት፡ ደረሰኙ ወደ ትክክለኛው ቁጥር (1356) የተላከ አይደለም።")
         return
@@ -110,6 +127,7 @@ def handle_all_messages(message):
     if user_id in pending_payments and text.isdigit():
         num = int(text)
         data = pending_payments[user_id]
+        
         if 1 <= num <= 100:
             try:
                 check = supabase.table("bingo_slots").select("is_booked").eq("slot_number", num).execute()
@@ -119,6 +137,7 @@ def handle_all_messages(message):
                     supabase.table("bingo_slots").update({"player_name": data["name"], "is_booked": True}).eq("slot_number", num).execute()
                     data["chosen_numbers"].append(num)
                     data["slots_left"] -= 1
+                    
                     if data["slots_left"] > 0:
                         bot.reply_to(message, f"✅ ቁጥር {num} ተይዟል። ገና {data['slots_left']} ምርጫ ይቀረዎታል።")
                     else:
@@ -126,8 +145,8 @@ def handle_all_messages(message):
                         bot.reply_to(message, f"🎯 ተጠናቋል! የያዟቸው ቁጥሮች፦ {nums_list}")
                         bot.send_message(GROUP_ID, f"🎰 **አዲስ ተጫዋች!**\n👤 ስም: {data['name']}\n🎟 ቁጥሮች: {nums_list}\n✅ ክፍያ: ተረጋግጧል")
                         del pending_payments[user_id]
-            except:
-                bot.reply_to(message, "⚠️ የቴክኒክ ስህተት።")
+            except Exception:
+                bot.reply_to(message, "⚠️ የቴክኒክ ስህተት ተፈጠረ።")
         else:
             bot.reply_to(message, "እባክዎ ከ 1 እስከ 100 ያለ ቁጥር ብቻ ይላኩ።")
 
