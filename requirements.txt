@@ -1,3 +1,2 @@
 pyTelegramBotAPI
-supabase-py
-postgrest
+supabase
