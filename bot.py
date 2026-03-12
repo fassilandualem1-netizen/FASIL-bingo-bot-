@@ -6,7 +6,7 @@ import socketserver
 import threading
 import os
 
-# --- 1. RENDER 'PORT' TRICK (ሬንደር እንዳያጠፋው) ---
+# --- 1. RENDER PORT TRICK ---
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
     handler = http.server.SimpleHTTPRequestHandler
@@ -30,7 +30,7 @@ pending_payments = {}
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "ሰላም! የ FASIL VIP ቢንጎ ረዳት ቦት ነኝ። 🎰\n\nለመጫወት የባንክ መልዕክቱን (SMS) 'Forward' ያድርጉልኝ።")
+    bot.reply_to(message, "ሰላም! የ FASIL VIP ቢንጎ ረዳት ቦት ነኝ። 🎰\n\nለመጫወት የባንክ መልዕክቱን 'Forward' ያድርጉልኝ።")
 
 @bot.message_handler(commands=['setprice'])
 def set_price(message):
@@ -48,12 +48,27 @@ def handle_messages(message):
     user_id = message.chat.id
     text = message.text
 
-    # የባንክ መልዕክት መሆኑን ቼክ አድርግ
-    is_telebirr = "transferred ETB" in text.lower() or "received ETB" in text.lower()
-    is_cbe = "credited with ETB" in text or "Banking with CBE" in text
+    # --- ሀ. የ"መዝገብ" ትዕዛዝ ማስተናገጃ ---
+    if text == "መዝገብ":
+        try:
+            response = supabase.table("bingo_slots").select("*").eq("is_booked", True).execute()
+            if response.data:
+                msg = "📝 **የተመዘገቡ ተጫዋቾች ዝርዝር፦**\n\n"
+                for row in response.data:
+                    msg += f"👤 {row['player_name']} 🎟 ቁጥር: {row['slot_number']}\n"
+                bot.reply_to(message, msg, parse_mode="Markdown")
+            else:
+                bot.reply_to(message, "እስካሁን የተመዘገበ ተጫዋች የለም።")
+        except:
+            bot.reply_to(message, "መዝገቡን ማምጣት አልተቻለም።")
+        return
 
-    if is_telebirr or is_cbe:
-        amount_match = re.search(r'ETB\s*(\d+(\.\d+)?)', text)
+    # --- ለ. የባንክ መልዕክት መለየት ---
+    is_bank_msg = any(keyword in text.lower() for keyword in ["transferred", "received", "credited", "telebirr", "cbe"])
+    
+    if is_bank_msg:
+        # የብር መጠን መፈለጊያ (ETB 200 or 200.00)
+        amount_match = re.search(r'(?:ETB|ብር)\s*(\d+(?:\.\d+)?)', text, re.IGNORECASE)
         if amount_match:
             amount = float(amount_match.group(1))
             if amount >= current_bet_price:
@@ -63,37 +78,38 @@ def handle_messages(message):
                     "slots_left": slots_count,
                     "chosen_numbers": []
                 }
-                bot.reply_to(message, f"✅ የ {amount} ብር ክፍያ ተረጋግጧል!\n🎯 ለ {slots_count} ቁጥር ይበቃዎታል።\nእባክዎ የሚፈልጉትን ቁጥር አንድ በአንድ ይላኩ።")
+                bot.reply_to(message, f"✅ የ {amount} ብር ክፍያ ተረጋግጧል!\n🎯 ለ {slots_count} ቁጥር ይበቃዎታል።\n\nእባክዎ የሚፈልጉትን ቁጥር አሁን ይላኩ።")
             else:
                 bot.reply_to(message, f"⚠️ መደቡ {current_bet_price} ብር ነው። የላኩት ግን {amount} ብር ነው።")
         return
 
-    # ቁጥር መመዝገቢያ
+    # --- ሐ. የቁጥር ምርጫ ማስተናገጃ ---
     if user_id in pending_payments and text.isdigit():
         num = int(text)
         data = pending_payments[user_id]
         
         if 1 <= num <= 100:
             try:
-                # ቼክ አድርግ
+                # ቁጥሩ መያዙን ቼክ አድርግ
                 check = supabase.table("bingo_slots").select("is_booked").eq("slot_number", num).execute()
                 if check.data and check.data[0]['is_booked']:
                     bot.reply_to(message, f"❌ ቁጥር {num} ተይዟል። ሌላ ይምረጡ።")
                 else:
+                    # በ Supabase መመዝገብ
                     supabase.table("bingo_slots").update({"player_name": data["name"], "is_booked": True}).eq("slot_number", num).execute()
                     data["chosen_numbers"].append(num)
                     data["slots_left"] -= 1
                     
                     if data["slots_left"] > 0:
-                        bot.reply_to(message, f"✅ ቁጥር {num} ተይዟል። ገና {data['slots_left']} ይቀረዎታል።")
+                        bot.reply_to(message, f"✅ ቁጥር {num} ተይዟል። ገና {data['slots_left']} ምርጫ ይቀረዎታል።")
                     else:
                         nums_list = ", ".join(map(str, data["chosen_numbers"]))
                         bot.reply_to(message, f"🎯 ተጠናቋል! የያዟቸው ቁጥሮች፦ {nums_list}")
-                        bot.send_message(GROUP_ID, f"🎰 **አዲስ ተጫዋች!**\n👤 ስም: {data['name']}\n🎟 ቁጥር: {nums_list}\n✅ ሁኔታ: ተከፍሏል")
+                        bot.send_message(GROUP_ID, f"🎰 **አዲስ ተጫዋች ተመዝግቧል!**\n👤 ስም: {data['name']}\n🎟 ቁጥሮች: {nums_list}\n✅ ክፍያ: ተረጋግጧል")
                         del pending_payments[user_id]
             except Exception as e:
-                bot.reply_to(message, "⚠️ ዳታቤዝ ላይ ስህተት ተፈጠረ። እባክዎ አስተዳዳሪውን ያነጋግሩ።")
+                bot.reply_to(message, "⚠️ የቴክኒክ ስህተት ተፈጠረ።")
         else:
-            bot.reply_to(message, "እባክዎ ከ 1 እስከ 100 ያለ ቁጥር ይላኩ።")
+            bot.reply_to(message, "እባክዎ ከ 1 እስከ 100 ያለ ቁጥር ብቻ ይላኩ።")
 
 bot.polling(none_stop=True)
