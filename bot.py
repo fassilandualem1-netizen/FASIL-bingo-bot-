@@ -17,12 +17,14 @@ supabase: Client = create_client(SB_URL, SB_KEY)
 pending_payments = {}
 admin_states = {}
 
-# --- 💰 DYNAMIC SETTINGS ---
-def get_config(key, default):
+# --- 💰 DYNAMIC PRICE GETTER ---
+def get_current_price():
     try:
-        res = supabase.table("settings").select("value").eq("key", key).execute()
-        return res.data[0]['value'] if res.data else default
-    except: return default
+        res = supabase.table("settings").select("value").eq("key", "ticket_price").execute()
+        if res.data:
+            return float(res.data[0]['value'])
+        return 10.0 # ዳታቤዙ ላይ ከጠፋ 10 ብር default ይሁን
+    except: return 10.0
 
 # --- 🛡️ STRICT VERIFIER ---
 def verify_payment_strict(text):
@@ -42,7 +44,7 @@ def verify_payment_strict(text):
     used = supabase.table("used_transactions").select("tid").eq("tid", tid).execute()
     if used.data: return False, "❌ ይህ ደረሰኝ ቀደም ብሎ ጥቅም ላይ ውሏል።", None, None
 
-    price = float(get_config("ticket_price", "30"))
+    price = get_current_price()
     amounts = re.findall(r'(?:ETB|BIRR|ብር|AMT)[:\s]*([\d\.]+)', text)
     amt = float(amounts[0]) if amounts else 0
     if amt < price: return False, f"❌ መጠኑ ከ {price} ብር ያነሰ ነው።", None, None
@@ -67,29 +69,24 @@ def admin_menu():
 # --- 🛰️ HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(message):
-    admin_states[message.from_user.id] = None # ስህተት እንዳይቆለፍ ማጽዳት
-    price = get_config("ticket_price", "30")
+    admin_states[message.from_user.id] = None
+    price = get_current_price()
     welcome = (f"ሰላም {message.from_user.first_name}! 🎰 Fasil Bingo\n\n"
               f"🏦 **CBE:** `1000584461757`\n"
               f"📱 **Telebirr:** `0951381356`\n"
-              f"💵 **ዋጋ:** `{price} ብር`\n\n"
+              f"💵 **የአሁኑ ዋጋ:** `{price} ብር`\n\n"
               "👉 ለመመዝገብ ደረሰኙን (SMS) እዚህ **Forward** ያድርጉ።")
     bot.send_message(message.chat.id, welcome, reply_markup=main_menu(message.from_user.id), parse_mode="Markdown")
-
-@bot.message_handler(func=lambda message: message.text == "🏠 ወደ ዋና ሜኑ")
-def back_home(message):
-    admin_states[message.from_user.id] = None
-    bot.send_message(message.chat.id, "ወደ ዋና ሜኑ ተመልሰናል", reply_markup=main_menu(message.from_user.id))
 
 @bot.message_handler(func=lambda message: message.text == "⚙️ Admin Panel" and message.from_user.id == ADMIN_ID)
 def admin_panel(message):
     admin_states[ADMIN_ID] = None
-    bot.send_message(ADMIN_ID, "የአድሚን መቆጣጠሪያ፦", reply_markup=admin_menu())
+    bot.send_message(ADMIN_ID, "እንኳን ደህና መጡ አድሚን ፋሲል! ምን ማድረግ ይፈልጋሉ?", reply_markup=admin_menu())
 
 @bot.message_handler(func=lambda message: message.text == "💰 ዋጋ ቀይር" and message.from_user.id == ADMIN_ID)
 def ask_price(message):
     admin_states[ADMIN_ID] = "waiting_for_price"
-    bot.send_message(ADMIN_ID, "እባክዎ አዲሱን ዋጋ በቁጥር ብቻ ያስገቡ (ለምሳሌ፦ 50)።")
+    bot.send_message(ADMIN_ID, "እባክዎ አዲሱን ዋጋ ያስገቡ (ለምሳሌ፦ 50)። \n\n⚠️ ቁጥር ብቻ ይላኩ!")
 
 @bot.message_handler(func=lambda message: message.text == "🔄 Reset" and message.from_user.id == ADMIN_ID)
 def reset_round(message):
@@ -99,30 +96,22 @@ def reset_round(message):
         bot.send_message(ADMIN_ID, "🔄 ሁሉም ቁጥሮች እና ደረሰኞች ጸድተዋል። አዲስ ዙር ተጀምሯል!")
     except: bot.send_message(ADMIN_ID, "❌ Reset አልተሳካም።")
 
-@bot.message_handler(func=lambda message: message.text == "📊 ሪፖርት" and message.from_user.id == ADMIN_ID)
-def report(message):
-    try:
-        res = supabase.table("bingo_slots").select("slot_number").eq("is_booked", True).execute()
-        count = len(res.data)
-        price = float(get_config("ticket_price", "30"))
-        bot.send_message(ADMIN_ID, f"📊 **የዛሬ ሪፖርት**\n\n🎟 የተያዙ ቁጥሮች፦ {count}\n💰 አጠቃላይ ብር፦ {count * price} ብር")
-    except: bot.send_message(ADMIN_ID, "❌ ሪፖርት ማምጣት አልተሳካም።")
-
 # --- 🎰 PROCESS LOGIC ---
 @bot.message_handler(func=lambda message: True)
 def handle_all(message):
     u_id = message.chat.id
     txt = message.text or ""
     
-    # ዋጋ መቀየሪያ ላይ ከሆንክ
+    # ዋጋ መቀየሪያ
     if admin_states.get(u_id) == "waiting_for_price":
-        try:
-            val = float(txt)
-            supabase.table("settings").upsert({"key": "ticket_price", "value": str(val)}).execute()
-            bot.send_message(u_id, f"✅ የቢንጎ ዋጋ ወደ {val} ብር ተቀይሯል።", reply_markup=admin_menu())
-            admin_states[u_id] = None
-        except:
-            bot.send_message(u_id, "❌ ስህተት! እባክዎ ቁጥር ብቻ ያስገቡ። (ወደ ኋላ ለመመለስ /start ይበሉ)")
+        if txt.isdigit():
+            try:
+                supabase.table("settings").upsert({"key": "ticket_price", "value": str(txt)}).execute()
+                bot.send_message(u_id, f"✅ የቢንጎ ዋጋ ወደ {txt} ብር ተቀይሯል።", reply_markup=admin_menu())
+                admin_states[u_id] = None
+            except: bot.send_message(u_id, "❌ ዳታቤዝ ላይ መመዝገብ አልተቻለም።")
+        else:
+            bot.send_message(u_id, "❌ እባክዎ ቁጥር ብቻ ያስገቡ።")
         return
 
     # የደረሰኝ ፍተሻ
@@ -158,7 +147,11 @@ def handle_all(message):
         return
 
     if txt == "💰 የጨዋታ ዋጋ":
-        bot.reply_to(message, f"💰 ወቅታዊ ዋጋ፦ {get_config('ticket_price', '30')} ብር")
+        bot.reply_to(message, f"💰 ወቅታዊ ዋጋ፦ {get_current_price()} ብር")
+
+    if txt == "🏠 ወደ ዋና ሜኑ":
+        admin_states[u_id] = None
+        bot.send_message(u_id, "ወደ ዋና ሜኑ ተመልሰናል", reply_markup=main_menu(u_id))
 
 app = Flask(__name__)
 @app.route('/')
