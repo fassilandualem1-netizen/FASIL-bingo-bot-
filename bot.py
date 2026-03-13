@@ -5,21 +5,15 @@ from datetime import datetime
 from flask import Flask
 from telebot import types
 
-# --- 1. CONFIGURATION (ፋሲል፡ እዚህ ጋር ነው ቁልፉን የቆለፍኩት) ---
+# --- 1. CONFIGURATION ---
 API_TOKEN = '8721334129:AAHcpUwIywYh_glndRiWWLNryx2CvrjMUFQ'
 ADMIN_ID = 8488592165 
 GROUP_ID = -1003881429974 
 SB_URL = "https://hpdhhomunbpcluuhmila.supabase.co"
-
-# በ Render ላይ "Environment" ውስጥ የገባውን ችላ እንዲል ቁልፉን እዚህ ጋር ቀጥታ አስገብቼዋለሁ
 SB_KEY = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwZGhob211bmJwY2x1dWhtaWxhIiwicm9sZMi6ImFub24iLCJpYXQiOjE3NzMyNDM2MDcsImV4cCI6MjA4ODgxOTYwN30.EIDhhsFaR6Qw5VVobmQs5JYlbJaDBjxWf_F7kM-jEn0"
 
-# ለደህንነት ያህል በሁለቱም መንገድ እንዲሞክር (ከኮዱም ከ Render Settingsም)
-FINAL_KEY = os.environ.get('SB_KEY', SB_KEY)
-FINAL_URL = os.environ.get('SB_URL', SB_URL)
-
 bot = telebot.TeleBot(API_TOKEN)
-supabase: Client = create_client(FINAL_URL, FINAL_KEY)
+supabase: Client = create_client(SB_URL, SB_KEY)
 pending_payments = {}
 admin_states = {}
 
@@ -87,26 +81,55 @@ def admin_panel(message):
     admin_states[ADMIN_ID] = None
     bot.send_message(ADMIN_ID, "እንኳን ደህና መጡ አድሚን ፋሲል!", reply_markup=admin_menu())
 
-@bot.message_handler(func=lambda message: message.text == "💰 ዋጋ ቀይር" and message.from_user.id == ADMIN_ID)
-def ask_price(message):
-    admin_states[ADMIN_ID] = "waiting_for_price"
-    bot.send_message(ADMIN_ID, "እባክዎ አዲሱን ዋጋ በቁጥር ብቻ ያስገቡ (ለምሳሌ፦ 50)።")
-
-@bot.message_handler(func=lambda message: message.text == "🔄 Reset" and message.from_user.id == ADMIN_ID)
-def reset_round(message):
-    try:
-        supabase.table("bingo_slots").update({"is_booked": False, "player_name": None}).neq("slot_number", 0).execute()
-        supabase.table("used_transactions").delete().neq("tid", "0").execute()
-        bot.send_message(ADMIN_ID, "🔄 ሁሉም ቁጥሮች እና ደረሰኞች ጸድተዋል። አዲስ ዙር ተጀምሯል!", reply_markup=admin_menu())
-    except Exception as e:
-        bot.send_message(ADMIN_ID, f"❌ Reset አልተሳካም፦ {str(e)}")
-
 # --- 🎰 PROCESS LOGIC ---
 @bot.message_handler(func=lambda message: True)
 def handle_all(message):
     u_id = message.chat.id
     txt = message.text or ""
-    
+
+    # 1. 📖 እንዴት መጫወት ይቻላል?
+    if txt == "📖 እንዴት መጫወት ይቻላል?":
+        instruction = (
+            "📖 **የአጠቃቀም መመሪያ**\n\n"
+            "1️⃣ መጀመሪያ ወደ CBE ወይም Telebirr ብር ይላኩ።\n"
+            "2️⃣ የደረሰኙን መልዕክት (SMS) ሙሉ በሙሉ ኮፒ አድርገው እዚህ ይላኩ።\n"
+            "3️⃣ ቦቱ ደረሰኙን ሲያረጋግጥ ስምዎን ይጠይቅዎታል።\n"
+            "4️⃣ በመጨረሻም ከ1-100 ያሉ ክፍት ቁጥሮችን መርጠው ይላኩ።\n\n"
+            "መልካም ዕድል! 🎰"
+        )
+        bot.send_message(u_id, instruction, parse_mode="Markdown")
+        return
+
+    # 2. 📊 ሪፖርት (ለአድሚን ብቻ)
+    if txt == "📊 ሪፖርት" and message.from_user.id == ADMIN_ID:
+        try:
+            res = supabase.table("bingo_slots").select("slot_number").eq("is_booked", True).execute()
+            count = len(res.data) if res.data else 0
+            price = get_current_price()
+            if count == 0:
+                bot.send_message(ADMIN_ID, "📊 **የዛሬ ሪፖርት**\n\nእስካሁን ምንም የተመዘገበ ተጫዋች የለም።")
+            else:
+                bot.send_message(ADMIN_ID, f"📊 **የዛሬ ሪፖርት**\n\n🎟 የተያዙ ቁጥሮች፦ {count}\n💰 አጠቃላይ ብር፦ {count * price} ብር")
+        except:
+            bot.send_message(ADMIN_ID, "❌ ሪፖርት ማምጣት አልተሳካም።")
+        return
+
+    # 3. 🔄 Reset (ለአድሚን ብቻ)
+    if txt == "🔄 Reset" and message.from_user.id == ADMIN_ID:
+        try:
+            supabase.table("bingo_slots").update({"is_booked": False, "player_name": None}).neq("slot_number", 0).execute()
+            supabase.table("used_transactions").delete().neq("tid", "0").execute()
+            bot.send_message(ADMIN_ID, "🔄 ሁሉም ቁጥሮች እና ደረሰኞች ጸድተዋል። አዲስ ዙር ተጀምሯል!", reply_markup=admin_menu())
+        except Exception as e:
+            bot.send_message(ADMIN_ID, f"❌ Reset አልተሳካም፦ {str(e)}")
+        return
+
+    # 4. 💰 ዋጋ ቀይር (ለአድሚን ብቻ)
+    if txt == "💰 ዋጋ ቀይር" and message.from_user.id == ADMIN_ID:
+        admin_states[ADMIN_ID] = "waiting_for_price"
+        bot.send_message(ADMIN_ID, "እባክዎ አዲሱን ዋጋ በቁጥር ብቻ ያስገቡ (ለምሳሌ፦ 50)።")
+        return
+
     if admin_states.get(u_id) == "waiting_for_price":
         if txt.isdigit():
             try:
@@ -115,7 +138,6 @@ def handle_all(message):
                     supabase.table("settings").update({"value": str(txt)}).eq("key", "ticket_price").execute()
                 else:
                     supabase.table("settings").insert({"key": "ticket_price", "value": str(txt)}).execute()
-                
                 bot.send_message(u_id, f"✅ የቢንጎ ዋጋ ወደ {txt} ብር ተቀይሯል።", reply_markup=admin_menu())
                 admin_states[u_id] = None
             except Exception as e:
@@ -124,11 +146,13 @@ def handle_all(message):
             bot.send_message(u_id, "❌ እባክዎ ቁጥር ብቻ ያስገቡ።")
         return
 
+    # 5. የቤት መመለሻ
     if txt == "🏠 ወደ ዋና ሜኑ":
         admin_states[u_id] = None
         bot.send_message(u_id, "ወደ ዋና ሜኑ ተመልሰናል", reply_markup=main_menu(u_id))
         return
 
+    # 6. የደረሰኝ ፍተሻ
     if any(k in txt.lower() for k in ['cbe', 'telebirr', 'ብር', 'dear', 'successfully']):
         is_valid, amt_or_reason, tid, r_date = verify_payment_strict(txt)
         if not is_valid:
@@ -138,6 +162,7 @@ def handle_all(message):
         bot.reply_to(message, "✅ ክፍያ ተረጋግጧል! አሁን ስምዎን ይላኩ።")
         return
 
+    # 7. ምዝገባ መቀጠያ (ስም እና ቁጥር)
     if u_id in pending_payments:
         p_data = pending_payments[u_id]
         if p_data["step"] == "name":
@@ -160,6 +185,7 @@ def handle_all(message):
                 bot.reply_to(message, f"❌ ስህተት፦ {str(e)}")
         return
 
+    # 8. ሌሎች በተኖች
     if txt == "💰 የጨዋታ ዋጋ":
         bot.reply_to(message, f"💰 ወቅታዊ ዋጋ፦ {get_current_price()} ብር")
         
