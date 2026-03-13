@@ -5,36 +5,24 @@ from datetime import datetime
 from flask import Flask
 from telebot import types
 
-# --- 1. CONFIGURATION ---
+# --- 1. CONFIGURATION (አዲሱ መረጃ እዚህ ገብቷል) ---
 API_TOKEN = '8721334129:AAHcpUwIywYh_glndRiWWLNryx2CvrjMUFQ'
 ADMIN_ID = 8488592165 
 GROUP_ID = -1003881429974 
-SB_URL = "https://hpdhhomunbpcluuhmila.supabase.co"
-SB_KEY = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwZGhob211bmJwY2x1dWhtaWxhIiwicm9sZMi6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzI0MzYwNywiZXhwIjoyMDg4ODE5NjA3fQ.AwPWqpwqE8ymydU9RXamq1SSdDOJQaa7CKNtdNtuLVc"
+SB_URL = "https://htdqqcrgzmyegpovnppi.supabase.co"
+SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh0ZHFxY3Jnem15ZWdwb3ZucHBpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzQyNDIxMiwiZXhwIjoyMDg5MDAwMjEyfQ.qa52FddJte01BIbVJ4P20R7NpfIzPWJtmHc_T2ozeTY"
 
 bot = telebot.TeleBot(API_TOKEN)
 supabase: Client = create_client(SB_URL, SB_KEY)
 pending_payments = {}
 admin_states = {}
 
+# --- 💰 DYNAMIC PRICE GETTER ---
 def get_current_price():
     try:
         res = supabase.table("settings").select("value").eq("key", "ticket_price").execute()
         return float(res.data[0]['value']) if res.data else 10.0
     except: return 10.0
-
-# --- 🏠 KEYBOARDS ---
-def main_menu(user_id):
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    # እዚህ ጋር አላስፈላጊዎቹን አጥፍቻቸዋለሁ
-    markup.add("💰 የጨዋታ ዋጋ")
-    if user_id == ADMIN_ID: markup.add("⚙️ Admin Panel")
-    return markup
-
-def admin_menu():
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add("📊 ሪፖርት", "💰 ዋጋ ቀይር", "🔄 Reset", "🏠 ወደ ዋና ሜኑ")
-    return markup
 
 # --- 🛡️ VERIFIER ---
 def verify_payment_strict(text):
@@ -55,6 +43,18 @@ def verify_payment_strict(text):
     
     return True, amt, tid
 
+# --- 🏠 KEYBOARDS ---
+def main_menu(user_id):
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add("📊 የቢንጎ ሰሌዳ እይ", "💰 የጨዋታ ዋጋ")
+    if user_id == ADMIN_ID: markup.add("⚙️ Admin Panel")
+    return markup
+
+def admin_menu():
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add("📊 ሪፖርት", "💰 ዋጋ ቀይር", "🔄 Reset", "🏠 ወደ ዋና ሜኑ")
+    return markup
+
 # --- 🛰️ HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -73,7 +73,25 @@ def handle_all(message):
     u_id = message.chat.id
     txt = message.text or ""
 
-    # --- ADMIN ACTIONS ---
+    # 1. 📊 የቢንጎ ሰሌዳ (1-100)
+    if txt == "📊 የቢንጎ ሰሌዳ እይ":
+        try:
+            res = supabase.table("bingo_slots").select("slot_number, is_booked, player_name").order("slot_number").execute()
+            board = "🎰 **የቢንጎ ሰሌዳ (1-100)**\n\n"
+            for r in res.data:
+                icon = f"✅ {r['player_name']}" if r['is_booked'] else "⚪ [ክፍት]"
+                board += f"{r['slot_number']}. {icon}\n"
+            
+            if len(board) > 4000:
+                bot.send_message(u_id, board[:4000], parse_mode="Markdown")
+                bot.send_message(u_id, board[4000:], parse_mode="Markdown")
+            else:
+                bot.send_message(u_id, board, parse_mode="Markdown")
+        except Exception as e:
+            bot.reply_to(message, f"❌ ስህተት፦ {str(e)}")
+        return
+
+    # 2. ⚙️ Admin Panel & Actions
     if txt == "⚙️ Admin Panel" and u_id == ADMIN_ID:
         bot.send_message(u_id, "የአድሚን መቆጣጠሪያ", reply_markup=admin_menu())
         return
@@ -95,48 +113,44 @@ def handle_all(message):
 
     if txt == "🔄 Reset" and u_id == ADMIN_ID:
         try:
-            # ሰሌዳውን ማጽዳት
             supabase.table("bingo_slots").update({"is_booked": False, "player_name": None}).neq("slot_number", 0).execute()
-            # የቆዩ ደረሰኞችን ማጽዳት
             supabase.table("used_transactions").delete().neq("tid", "0").execute()
             bot.send_message(u_id, "🔄 ሰሌዳውና ደረሰኞች ጸድተዋል።", reply_markup=admin_menu())
-        except Exception as e: bot.send_message(u_id, f"❌ Reset አልተሳካም፦ {str(e)}")
+        except Exception as e: bot.reply_to(message, f"❌ ስህተት፦ {str(e)}")
         return
 
     if txt == "📊 ሪፖርት" and u_id == ADMIN_ID:
         try:
             res = supabase.table("bingo_slots").select("slot_number").eq("is_booked", True).execute()
             count = len(res.data) if res.data else 0
-            bot.send_message(u_id, f"📊 እስካሁን {count} ሰዎች ተመዝግበዋል።")
+            price = get_current_price()
+            msg = f"📊 **ሪፖርት**\n\n🎟 የተያዙ፦ {count}\n💰 ብር፦ {count * price} ብር" if count > 0 else "📊 እስካሁን ምንም ተመዝጋቢ የለም።"
+            bot.send_message(u_id, msg)
         except: bot.send_message(u_id, "❌ ሪፖርት ማምጣት አልተሳካም።")
         return
 
-    if txt == "🏠 ወደ ዋና ሜኑ":
-        admin_states[u_id] = None
-        bot.send_message(u_id, "ወደ ዋና ሜኑ ተመልሰናል", reply_markup=main_menu(u_id))
-        return
-
-    # --- USER ACTIONS ---
+    # 3. ደረሰኝ ፍተሻ
     if any(k in txt.lower() for k in ['cbe', 'telebirr', 'ብር', 'dear', 'successfully']):
         valid, result, tid = verify_payment_strict(txt)
         if not valid:
             bot.reply_to(message, result)
             return
         pending_payments[u_id] = {"tid": tid, "amt": result, "step": "name"}
-        bot.reply_to(message, "✅ ክፍያ ተረጋግጧል! ስምዎን ይላኩ።")
+        bot.reply_to(message, "✅ ክፍያ ተረጋግጧል! አሁን ስምዎን ይላኩ።")
         return
 
+    # 4. ምዝገባ መቀጠያ
     if u_id in pending_payments:
         p = pending_payments[u_id]
         if p["step"] == "name":
             p["name"], p["step"] = txt, "num"
-            bot.reply_to(message, f"እሺ {txt}! ቁጥር ይምረጡ (1-100)።")
+            bot.reply_to(message, f"እሺ {txt}! አሁን ቁጥር ይምረጡ (1-100)።")
         elif p["step"] == "num" and txt.isdigit():
             num = int(txt)
             try:
                 check = supabase.table("bingo_slots").select("is_booked").eq("slot_number", num).execute()
                 if check.data and check.data[0]['is_booked']:
-                    bot.reply_to(message, "❌ ቁጥሩ ተይዟል!")
+                    bot.reply_to(message, "❌ ቁጥሩ ተይዟል! ሌላ ይምረጡ።")
                     return
                 supabase.table("bingo_slots").update({"player_name": p["name"], "is_booked": True}).eq("slot_number", num).execute()
                 supabase.table("used_transactions").insert({"tid": p["tid"], "user_id": str(u_id), "amount": p["amt"]}).execute()
@@ -146,8 +160,8 @@ def handle_all(message):
             except Exception as e: bot.reply_to(message, f"❌ ስህተት፦ {str(e)}")
         return
 
-    if txt == "💰 የጨዋታ ዋጋ":
-        bot.reply_to(message, f"💰 የአሁኑ ዋጋ፦ {get_current_price()} ብር")
+    if txt == "💰 የጨዋታ ዋጋ": bot.reply_to(message, f"💰 ዋጋ፦ {get_current_price()} ብር")
+    if txt == "🏠 ወደ ዋና ሜኑ": bot.send_message(u_id, "ወደ ዋና ሜኑ ተመልሰናል", reply_markup=main_menu(u_id))
 
 app = Flask(__name__)
 @app.route('/')
