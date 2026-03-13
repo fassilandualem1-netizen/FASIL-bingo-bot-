@@ -3,7 +3,6 @@ from supabase import create_client, Client
 import re, time, os, threading, random
 from flask import Flask
 
-# --- 1. Flask ---
 app = Flask(__name__)
 @app.route('/')
 def health_check(): return "Bingo Bot Active!"
@@ -12,7 +11,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- 2. CONFIG ---
+# CONFIG
 API_TOKEN = '8721334129:AAHcpUwIywYh_glndRiWWLNryx2CvrjMUFQ'
 GROUP_ID = -1003881429974 
 SB_URL = "https://hpdhhomunbpcluuhmila.supabase.co"
@@ -20,122 +19,88 @@ SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6I
 
 bot = telebot.TeleBot(API_TOKEN)
 supabase: Client = create_client(SB_URL, SB_KEY)
-
-MY_NAMES = ["fasil", "fassil", "andualem"]
-MY_CBE, MY_TELEBIRR = "1000584461757", "0951381356"
 pending_payments = {}
 
-# --- 3. FUNCTIONS ---
-
-def get_live_leaderboard():
-    """ግሩፕ ላይ በቁጥሩ ቦታ ስም ተክቶ የሚያሳይ ሰንጠረዥ"""
-    try:
-        res = supabase.table("bingo_slots").select("slot_number", "is_booked", "player_name").order("slot_number").execute()
-        text = "🎰 **FASIL VIP BINGO LIVE BOARD** 🎰\n\n"
-        
-        for row in res.data:
-            num = row['slot_number']
-            if row['is_booked']:
-                # ቁጥሩ ከተያዘ ስሙን ያሳያል (ረጅም ከሆነ ያሳጥረዋል)
-                name = row['player_name'][:8]
-                text += f"📍 {num:02d} - {name} ✅\n"
-            else:
-                # ካልተያዘ ቁጥሩን ብቻ ያሳያል
-                text += f"⬜️ {num:02d} - ክፍት ነው\n"
-        
-        # ሰንጠረዡ ረጅም ስለሚሆን ለግሩፕ እንዲመች በትንሹ መላክ ይቻላል
-        return text
-    except: return "⚠️ ቦርዱን ማግኘት አልተቻለም።"
-
-def assign_free_slot(user_name):
-    res = supabase.table("bingo_slots").select("slot_number").eq("is_booked", False).execute()
-    if res.data:
-        free_nums = [r['slot_number'] for r in res.data]
-        selected = random.choice(free_nums)
-        supabase.table("bingo_slots").update({"player_name": user_name, "is_booked": True}).eq("slot_number", selected).execute()
-        return selected
-    return None
-
-# --- 4. HANDLERS ---
+def extract_tid(text):
+    # CBE FT... ቁጥሮችን ጨምሮ ሁሉንም የትራንዛክሽን መለያዎች ይፈልጋል
+    match = re.search(r'(?:FT|DCC|TXN|ID|Ref|ቁጥር)[:\s]*([A-Z0-9&]+)', text, re.IGNORECASE)
+    return match.group(1).upper() if match else None
 
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = str(message.chat.id)
     args = message.text.split()
-    referrer_id = args[1] if len(args) > 1 else None
-    
+    ref_id = args[1] if len(args) > 1 else None
     try:
-        supabase.table("users").upsert({"user_id": user_id, "user_name": message.from_user.first_name, "referred_by": referrer_id}).execute()
+        supabase.table("users").upsert({"user_id": user_id, "user_name": message.from_user.first_name, "referred_by": ref_id}).execute()
     except: pass
-
-    invite_link = f"https://t.me/{(bot.get_me()).username}?start={user_id}"
-    bot.reply_to(message, f"ሰላም! የርስዎ መጋበዣ ሊንክ፦\n`{invite_link}`", parse_mode="Markdown")
-
-@bot.message_handler(commands=['viewslot'])
-def view(message):
-    # ሰንጠረዡን በምስል ወይም በጽሁፍ መላክ (ጽሁፉ ረጅም ከሆነ ቴሌግራም ላይቆርጠው ይችላል)
-    bot.reply_to(message, "🎰 ወቅታዊውን የቢንጎ ቦርድ በግሩፑ ላይ ይመልከቱ ወይም እዚህ ይጫኑ፦ /leaderboard")
-
-@bot.message_handler(commands=['leaderboard'])
-def show_l_board(message):
-    # ይህ በብዛት የገዙትን Top 5 ያሳያል
-    res = supabase.table("bingo_slots").select("player_name").eq("is_booked", True).execute()
-    counts = {}
-    for r in res.data: counts[r['player_name']] = counts.get(r['player_name'], 0) + 1
-    sorted_c = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:5]
     
-    msg = "🏆 **ከፍተኛ ተጫዋቾች** 🏆\n"
-    for name, count in sorted_c: msg += f"👤 {name} — {count} ቁጥሮች\n"
-    bot.reply_to(message, msg)
+    bot.reply_to(message, f"ሰላም {message.from_user.first_name}! 🎰\nለመመዝገብ የባንክ መልዕክቱን እዚህ Forward ያድርጉ።\n\n🔗 የእርስዎ መጋበዣ ሊንክ፦\nhttps://t.me/{(bot.get_me()).username}?start={user_id}")
 
 @bot.message_handler(func=lambda message: True)
-def handle_all(message):
-    user_id = message.chat.id
-    text = message.text or ""
+def handle_msg(message):
+    u_id = message.chat.id
+    txt = message.text or ""
 
     # 1. ክፍያ ማረጋገጥ
-    if any(k in text.lower() for k in ['cbe', 'telebirr', 'ብር', 'transferred']):
-        bot.reply_to(message, "⏳ እያረጋገጥኩ ነው...")
-        tid_match = re.search(r'(?i)(?:id|txn|Ref|FT|DCC|ቁጥር)[:\s]*([A-Z0-9&]+)', text)
-        if tid_match:
-            tid = tid_match.group(1).upper()
-            pending_payments[user_id] = {"tid": tid, "step": "awaiting_name"}
-            bot.reply_to(message, "✅ ክፍያ ተረጋግጧል! አሁን በሰንጠረዡ ላይ እንዲሰፍር የሚፈልጉትን **ስም ወይም ስልክ ቁጥር** ይላኩ።")
+    if any(k in txt.lower() for k in ['cbe', 'telebirr', 'transferred', 'credited', 'birr', 'ብር']):
+        tid = extract_tid(txt)
+        if tid:
+            check = supabase.table("used_transactions").select("tid").eq("tid", tid).execute()
+            if check.data:
+                bot.reply_to(message, "❌ ይህ ማጣቀሻ ቁጥር ቀደም ብሎ ጥቅም ላይ ውሏል!")
+            else:
+                pending_payments[u_id] = {"tid": tid, "step": "name"}
+                bot.reply_to(message, "✅ ክፍያ ተረጋግጧል! በቦርዱ ላይ እንዲሰፍር የሚፈልጉትን **ስም ወይም ስልክ** ይላኩ።")
+        else:
+            bot.reply_to(message, "❌ የማጣቀሻ ቁጥሩን (TID) ማግኘት አልቻልኩም። እባክዎ ሙሉውን SMS ይላኩ።")
         return
 
     # 2. ስም መቀበል
-    if user_id in pending_payments and pending_payments[user_id]["step"] == "awaiting_name":
-        pending_payments[user_id]["player_name"] = text
-        pending_payments[user_id]["step"] = "awaiting_number"
-        bot.reply_to(message, f"እሺ **{text}**! አሁን የሚፈልጉትን ቁጥር (1-100) ይላኩ።")
+    if u_id in pending_payments and pending_payments[u_id]["step"] == "name":
+        pending_payments[u_id]["name"] = txt
+        pending_payments[u_id]["step"] = "number"
+        bot.reply_to(message, f"እሺ {txt}! አሁን ከ 1-100 የሚፈልጉትን ክፍት ቁጥር ይላኩ።")
         return
 
-    # 3. ቁጥር መቀበል እና ግሩፕ ላይ መለጠፍ
-    if user_id in pending_payments and pending_payments[user_id]["step"] == "awaiting_number" and text.isdigit():
-        num = int(text)
-        name = pending_payments[user_id]["player_name"]
-        
-        # በዳታቤዝ መመዝገብ
-        supabase.table("bingo_slots").update({"player_name": name, "is_booked": True}).eq("slot_number", num).execute()
-        supabase.table("used_transactions").insert({"tid": pending_payments[user_id]["tid"], "user_id": user_id}).execute()
-        
-        bot.reply_to(message, f"✅ ቁጥር {num} በስምዎ ተመዝግቧል!")
-        
-        # ግሩፕ ላይ ማስታወቅ (ይህ አንተ የፈለግከው ነው!)
-        bot.send_message(GROUP_ID, f"🎰 **አዲስ ተመዝጋቢ!**\n\n👤 ተጫዋች፦ {name}\n🎟 የተያዘ ቁጥር፦ {num}\n\n✅ ቁጥሩ በሰንጠረዡ ላይ ተሰይሟል።")
-        
-        # ሪፈራል ቦነስ ቼክ
-        user_res = supabase.table("users").select("referred_by", "has_played").eq("user_id", str(user_id)).execute()
-        if user_res.data and not user_res.data[0]['has_played']:
-            ref_id = user_res.data[0]['referred_by']
-            if ref_id:
-                ref_user = supabase.table("users").select("user_name").eq("user_id", ref_id).execute()
-                if ref_user.data:
-                    f_num = assign_free_slot(ref_user.data[0]['user_name'])
-                    if f_num: bot.send_message(ref_id, f"🎁 ሪፈራል ስጦታ! ቁጥር {f_num} በነፃ ተሰጥቶዎታል።")
-            supabase.table("users").update({"has_played": True}).eq("user_id", str(user_id)).execute()
-        
-        del pending_payments[user_id]
+    # 3. ቁጥር መቀበል
+    if u_id in pending_payments and pending_payments[u_id]["step"] == "number" and txt.isdigit():
+        num = int(txt)
+        if 1 <= num <= 100:
+            slot_check = supabase.table("bingo_slots").select("is_booked").eq("slot_number", num).execute()
+            if slot_check.data and slot_check.data[0]['is_booked']:
+                bot.reply_to(message, f"❌ ቁጥር {num} ተይዟል፣ ሌላ ይምረጡ።")
+            else:
+                name = pending_payments[u_id]["name"]
+                tid = pending_payments[u_id]["tid"]
+                
+                # ምዝገባ
+                supabase.table("bingo_slots").update({"player_name": name, "is_booked": True}).eq("slot_number", num).execute()
+                supabase.table("used_transactions").insert({"tid": tid, "user_id": str(u_id)}).execute()
+                
+                bot.reply_to(message, f"✅ ቁጥር {num} በስምዎ ተመዝግቧል! መልካም እድል!")
+                
+                # ግሩፕ ላይ መለጠፍ (Leaderboard style)
+                bot.send_message(GROUP_ID, f"🎰 **አዲስ ተመዝጋቢ!**\n\n👤 ተጫዋች፦ {name}\n🎟 የተያዘ ቁጥር፦ {num}\n\n✅ ቁጥሩ በሰንጠረዡ ላይ ተሰይሟል።")
+                
+                # የሪፈራል ቦነስ ቼክ
+                user_res = supabase.table("users").select("referred_by", "has_played").eq("user_id", str(u_id)).execute()
+                if user_res.data and not user_res.data[0]['has_played']:
+                    ref_id = user_res.data[0]['referred_by']
+                    if ref_id:
+                        # ጋባዡ 1 ነፃ ቁጥር ያገኛል
+                        res_free = supabase.table("bingo_slots").select("slot_number").eq("is_booked", False).execute()
+                        if res_free.data:
+                            free_num = random.choice([r['slot_number'] for r in res_free.data])
+                            ref_info = supabase.table("users").select("user_name").eq("user_id", ref_id).execute()
+                            ref_name = ref_info.data[0]['user_name'] if ref_info.data else "ጋባዥ"
+                            supabase.table("bingo_slots").update({"player_name": f"{ref_name} (Bonus)", "is_booked": True}).eq("slot_number", free_num).execute()
+                            bot.send_message(ref_id, f"🎁 **የሪፈራል ስጦታ!**\nየጋበዙት ሰው ስለተጫወተ ቁጥር {free_num} በነፃ ተሰጥቶዎታል።")
+                    supabase.table("users").update({"has_played": True}).eq("user_id", str(u_id)).execute()
+                
+                del pending_payments[u_id]
+        else:
+            bot.reply_to(message, "❌ እባክዎ ከ 1-100 ያለ ቁጥር ብቻ ይላኩ።")
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
