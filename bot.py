@@ -16,7 +16,7 @@ bot = telebot.TeleBot(API_TOKEN)
 supabase: Client = create_client(SB_URL, SB_KEY)
 pending_payments = {}
 
-# --- 2. SETTINGS ---
+# --- 2. SETTINGS (Flexible) ---
 SET_PRICE = 30.0            
 TIME_LIMIT_MINS = 15       
 MY_NAME = "FASIL"          
@@ -26,30 +26,30 @@ MY_PHONE_LAST = "51381356"
 # --- 3. UTILITY FUNCTIONS ---
 
 def verify_payment(text):
+    """የደረሰኝ ጥብቅ ፍተሻ"""
     text = text.upper()
     now = datetime.now()
 
     # ሀ. የስም እና የአካውንት ፍተሻ
     has_my_info = (MY_NAME in text) or (MY_CBE_LAST in text) or (MY_PHONE_LAST in text)
     if not has_my_info:
-        return False, "❌ ስህተት፦ ደረሰኙ የእኔ (Fasil) አይደለም። እባክዎ ወደ ትክክለኛው አካውንት የተላከ ደረሰኝ ይላኩ።", None
+        return False, "❌ ስህተት፦ ደረሰኙ ወደ እኔ (Fasil) የተላከ መሆኑን ማረጋገጥ አልተቻለም።", None
 
     # ለ. የብር መጠን ፍተሻ
     amounts = re.findall(r'(?:ETB|BIRR|ብር|AMT|AMOUNT)[:\s]*([\d\.]+)', text)
     if amounts:
         found_amt = float(amounts[0])
         if found_amt < SET_PRICE:
-            return False, f"❌ ስህተት፦ መከፈል ያለበት {SET_PRICE} ብር ነው። ደረሰኙ ግን {found_amt} ብር ይላል።", None
+            return False, f"❌ ስህተት፦ መከፈል ያለበት {SET_PRICE} ብር ነው። የላኩት ግን {found_amt} ብር ይላል።", None
     else:
-        return False, "❌ ስህተት፦ በደረሰኙ ላይ የብር መጠን አልተገኘም።", None
+        return False, "❌ ስህተት፦ በደረሰኙ ላይ የክፍያ መጠን አልተገኘም።", None
 
     # ሐ. የቀን ፍተሻ
     date_match = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text)
     if date_match:
-        msg_day = int(date_match.group(1))
-        msg_month = int(date_match.group(2))
+        msg_day, msg_month = int(date_match.group(1)), int(date_match.group(2))
         if msg_day != now.day or msg_month != now.month:
-            return False, "❌ ስህተት፦ ደረሰኙ የዛሬ አይደለም። እባክዎ የዛሬውን ደረሰኝ ይላኩ።", None
+            return False, "❌ ስህተት፦ ደረሰኙ የዛሬ አይደለም።", None
 
     # መ. የሰዓት ፍተሻ
     time_match = re.search(r'(\d{1,2}):(\d{2})', text)
@@ -64,7 +64,7 @@ def verify_payment(text):
 
     # ሠ. TID ማውጣት
     tid_match = re.search(r'(?:FT|ID|TXN|TRANS)[:\s]*([A-Z0-9]+)', text)
-    tid = tid_match.group(1) if tid_match else "UNKNOWN"
+    tid = tid_match.group(1) if tid_match else "TID" + str(int(time.time()))
     return True, "Success", tid
 
 # --- 4. HANDLERS ---
@@ -98,8 +98,9 @@ def handle_all(message):
     u_id = message.chat.id
     txt = message.text or ""
 
-    # የባንክ መልዕክት ሲላክ
-    if any(k in txt.lower() for k in ['cbe', 'telebirr', 'ብር', 'transferred', 'credited', 'sent']):
+    # 1. የባንክ መልዕክት ሲላክ (Smart Filter)
+    bank_words = ['cbe', 'telebirr', 'ብር', 'transferred', 'credited', 'sent', 'received', 'dash']
+    if any(k in txt.lower() for k in bank_words):
         bot.reply_to(message, "⏳ ደረሰኙን እያረጋገጥኩ ነው... እባክዎ ይታገሱ።")
         
         is_valid, reason, tid = verify_payment(txt)
@@ -119,27 +120,29 @@ def handle_all(message):
             bot.reply_to(message, "⚠️ ዳታቤዝ ላይ ችግር አለ።")
         return
 
-    # የስም መቀበያ
-    if u_id in pending_payments and pending_payments[u_id]["step"] == "name":
-        pending_payments[u_id]["name"] = txt
-        pending_payments[u_id]["step"] = "num"
-        bot.reply_to(message, f"እሺ {txt}! አሁን ከ 1-100 ክፍት ቁጥር ይላኩ።")
+    # 2. በምዝገባ ሂደት ውስጥ ከሆነ
+    if u_id in pending_payments:
+        if pending_payments[u_id]["step"] == "name":
+            pending_payments[u_id]["name"] = txt
+            pending_payments[u_id]["step"] = "num"
+            bot.reply_to(message, f"እሺ {txt}! አሁን ከ 1-100 ክፍት ቁጥር ይላኩ።")
+        elif pending_payments[u_id]["step"] == "num" and txt.isdigit():
+            num = int(txt)
+            if 1 <= num <= 100:
+                name = pending_payments[u_id]["name"]
+                tid = pending_payments[u_id]["tid"]
+                # ዳታቤዝ ምዝገባ
+                supabase.table("bingo_slots").update({"player_name": name, "is_booked": True}).eq("slot_number", num).execute()
+                supabase.table("used_transactions").insert({"tid": tid, "user_id": str(u_id)}).execute()
+                bot.reply_to(message, f"✅ ቁጥር {num} ተመዝግቧል!")
+                bot.send_message(GROUP_ID, f"🎰 **አዲስ ተመዝጋቢ!**\n👤 ስም፦ {name}\n🎟 ቁጥር፦ {num}")
+                del pending_payments[u_id]
+            else:
+                bot.reply_to(message, "❌ እባክዎ ከ 1-100 ያለ ቁጥር ይላኩ።")
         return
 
-    # የቁጥር መቀበያ
-    if u_id in pending_payments and pending_payments[u_id]["step"] == "num" and txt.isdigit():
-        num = int(txt)
-        if 1 <= num <= 100:
-            name = pending_payments[u_id]["name"]
-            tid = pending_payments[u_id]["tid"]
-            # እዚህ ጋር የምዝገባ ዳታቤዝ ስራ ይገባል...
-            supabase.table("bingo_slots").update({"player_name": name, "is_booked": True}).eq("slot_number", num).execute()
-            supabase.table("used_transactions").insert({"tid": tid, "user_id": str(u_id)}).execute()
-            bot.reply_to(message, f"✅ ቁጥር {num} ተመዝግቧል!")
-            bot.send_message(GROUP_ID, f"🎰 አዲስ ተመዝጋቢ፦ {name}\n🎟 ቁጥር፦ {num}")
-            del pending_payments[u_id]
-        else:
-            bot.reply_to(message, "❌ እባክዎ ከ 1-100 ያለ ቁጥር ይላኩ።")
+    # 3. የማይታወቅ መልዕክት ከሆነ (ለማንኛውም ወሬ)
+    bot.reply_to(message, "⚠️ **ያልታወቀ መልዕክት!**\nለመመዝገብ የባንክ ደረሰኝዎን (SMS) እዚህ Forward ያድርጉ። ለሌላ መረጃ ከታች ያሉትን ቁልፎች ይጠቀሙ።")
 
 # --- 5. SERVER ---
 app = Flask(__name__)
