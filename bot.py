@@ -10,8 +10,8 @@ API_TOKEN = '8721334129:AAGmSeFapCG6pg2GcOvmhTphIRTCjx_rU-E'
 ADMIN_ID = 8488592165 
 GROUP_ID = -1003881429974 
 SB_URL = "https://htdqqcrgzmyegpovnppi.supabase.co"
-# ያረጋገጥከው አዲሱ ቁልፍ እዚህ ገብቷል
 SB_KEY = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh0ZHFxY3Jnem15ZWdwb3ZucHBpIiwicm9sZMi6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzQyNDIxMiwiZXhwIjoyMDg5MDAwMjEyfQ.qa52FddJte01BIbVJ4P20R7NpfIzPWJtmHc_T2ozeTY"
+RENDER_URL = "https://fasil-bingo-bot-assistant.onrender.com"
 
 bot = telebot.TeleBot(API_TOKEN)
 supabase: Client = create_client(SB_URL, SB_KEY)
@@ -23,7 +23,6 @@ def update_pinned_board():
         res = supabase.table("bingo_slots").select("slot_number, is_booked, player_name").order("slot_number").execute()
         board_text = "🎰 **Fasil Bingo (የዕጣ ሰሌዳ)** 🎰\n"
         board_text += f"📅 የታደሰበት ሰዓት፦ {datetime.now().strftime('%H:%M')}\n\n"
-        
         for r in res.data:
             status = f"✅ {r['player_name']}" if r['is_booked'] else "⚪ ክፍት"
             board_text += f"{r['slot_number']}. {status}\n"
@@ -50,7 +49,6 @@ def verify_payment_strict(text):
         if used.data: return False, "❌ ይህ ደረሰኝ ቀደም ብሎ ተመዝግቧል።", None
     except: pass
 
-    # የዕጣ ዋጋን ከዳታቤዝ መፈለግ (ከሌለ 20 ብር Default)
     try:
         price_res = supabase.table("settings").select("value").eq("key", "ticket_price").execute()
         price = float(price_res.data[0]['value']) if price_res.data else 20.0
@@ -68,19 +66,16 @@ def verify_payment_strict(text):
 def start(message):
     u_id = str(message.from_user.id)
     try:
-        # ተጠቃሚውን መመዝገብ
         supabase.table("users").upsert({"user_id": u_id, "username": message.from_user.username}).execute()
         bot.send_message(message.chat.id, "ሰላም! እንኳን ወደ ፋሲል ቢንጎ በሰላም መጡ። 🎰\nክፍያ ፈጽመው SMS እዚህ ይላኩ።")
     except Exception as e:
-        print(f"Start Error: {e}")
-        bot.send_message(message.chat.id, "ሰላም! ቦቱ ንቁ ነው (ዳታቤዝ ግንኙነት እየተሞከረ ነው)።")
+        bot.send_message(message.chat.id, "ሰላም! ቦቱ ንቁ ነው (የዳታቤዝ ግንኙነት በመሞከር ላይ)።")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all(message):
     u_id = message.chat.id
     txt = message.text or ""
 
-    # --- ADMIN: RESET & SETUP ---
     if u_id == ADMIN_ID:
         if txt == "🔄 Reset":
             supabase.table("bingo_slots").update({"is_booked": False, "player_name": None}).neq("slot_number", 0).execute()
@@ -94,7 +89,6 @@ def handle_all(message):
             update_pinned_board()
             return
 
-    # --- PAYMENT DETECTION ---
     if any(k in txt.lower() for k in ['cbe', 'telebirr', 'birr', 'ያስተላለፉት']):
         valid, amt, data = verify_payment_strict(txt)
         if not valid:
@@ -102,17 +96,12 @@ def handle_all(message):
             return
         
         pending_payments[u_id] = {
-            "tid": data['tid'], 
-            "amt": amt, 
-            "tickets": data['tickets'], 
-            "total": data['tickets'], 
-            "step": "name", 
-            "time": time.time()
+            "tid": data['tid'], "amt": amt, "tickets": data['tickets'], 
+            "total": data['tickets'], "step": "name", "time": time.time()
         }
         bot.reply_to(message, f"✅ ክፍያ ተረጋግጧል! {amt} ብር ({data['tickets']} ዕጣ)።\nአሁን **ሙሉ ስምዎን** ይላኩ።")
         return
 
-    # --- REGISTRATION (Wallet/Multi-Ticket) ---
     if u_id in pending_payments:
         p = pending_payments[u_id]
         if p["step"] == "name":
@@ -124,11 +113,9 @@ def handle_all(message):
             if check.data and check.data[0]['is_booked']:
                 bot.reply_to(message, "❌ ቁጥሩ ተይዟል! ሌላ ይምረጡ።")
                 return
-
             supabase.table("bingo_slots").update({"player_name": p["name"], "is_booked": True}).eq("slot_number", num).execute()
             p["tickets"] -= 1
             update_pinned_board()
-            
             if p["tickets"] > 0:
                 bot.send_message(u_id, f"✅ ቁጥር {num} ተመዝግቧል! {p['tickets']} ዕጣ ይቀሩዎታል። ቀጣዩን ቁጥር ይላኩ፦")
             else:
@@ -138,11 +125,22 @@ def handle_all(message):
                 del pending_payments[u_id]
         return
 
-# --- 🛰️ KEEP ALIVE & SERVER ---
+# --- 🛰️ KEEP ALIVE (SELF-PING) ---
+def self_ping():
+    while True:
+        try:
+            requests.get(RENDER_URL)
+            print("🚀 Self-ping successful")
+        except:
+            print("❌ Self-ping failed")
+        time.sleep(600) # በየ 10 ደቂቃው
+
 app = Flask(__name__)
 @app.route('/')
 def home(): return "Bot Active"
 
 if __name__ == "__main__":
+    threading.Thread(target=self_ping, daemon=True).start()
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000), daemon=True).start()
+    print("🚀 ቦቱ ስራ ጀምሯል...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
