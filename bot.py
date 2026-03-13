@@ -5,7 +5,7 @@ from datetime import datetime
 from flask import Flask
 from telebot import types
 
-# --- 1. CONFIG ---
+# --- 1. CONFIGURATION ---
 API_TOKEN = '8721334129:AAHcpUwIywYh_glndRiWWLNryx2CvrjMUFQ'
 ADMIN_ID = 6445347265 
 GROUP_ID = -1003881429974 
@@ -16,7 +16,7 @@ bot = telebot.TeleBot(API_TOKEN)
 supabase: Client = create_client(SB_URL, SB_KEY)
 pending_payments = {}
 
-# --- 2. SETTINGS ---
+# --- 2. DYNAMIC SETTINGS ---
 SET_PRICE = 30.0            
 TIME_LIMIT_MINS = 15       
 MY_NAME = "FASIL"          
@@ -24,57 +24,78 @@ MY_CBE_LAST = "84461757"
 MY_PHONE_LAST = "51381356"
 RENDER_URL = "https://fasil-bingo-bot-fasil-assistant.onrender.com"
 
-# --- 🚀 ዘላቂ መፍትሄ፡ ቦቱ እንዳይተኛ የሚከላከል (Self-Ping) ---
+# --- 🚀 ራስን መቀስቀሻ (KEEP ALIVE) ---
 def keep_awake():
     """በየ 5 ደቂቃው ሰርቨሩን በመቀስቀስ እንዳይተኛ ያደርጋል"""
     while True:
         try:
             requests.get(RENDER_URL) 
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 💤 ቦቱ ንቁ ነው! (Pinged every 5 mins)")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 💤 ቦቱ ንቁ ነው!")
         except Exception as e:
             print(f"Ping failed: {e}")
         time.sleep(300) # 5 ደቂቃ
 
-# --- 3. UTILITY FUNCTIONS ---
-def verify_payment(text):
+# --- 🛡️ በደረጃ የሚፈትሽ (SEQUENCE VERIFIER) ---
+def verify_payment_sequence(text):
     text = text.upper()
     now = datetime.now()
     
-    # ሀ. የስም እና የአካውንት ፍተሻ
-    has_my_info = (MY_NAME in text) or (MY_CBE_LAST in text) or (MY_PHONE_LAST in text)
-    if not has_my_info:
-        return False, "❌ ስህተት፦ ደረሰኙ ወደ እኔ (Fasil) የተላከ አይደለም።", None
+    # ደረጃ 1: ባንክ ቼክ
+    is_cbe = any(k in text for k in ["CBE", "COMMERCIAL", MY_CBE_LAST])
+    is_tele = any(k in text for k in ["TELEBIRR", MY_PHONE_LAST, "RECEIVED", "MOBILE"])
     
-    # ለ. የብር መጠን ፍተሻ
-    amounts = re.findall(r'(?:ETB|BIRR|ብር|AMT|AMOUNT)[:\s]*([\d\.]+)', text)
-    if amounts:
-        found_amt = float(amounts[0])
-        if found_amt < SET_PRICE:
-            return False, f"❌ ስህተት፦ መከፈል ያለበት {SET_PRICE} ብር ነው።", None
-    else:
-        return False, "❌ ስህተት፦ በደረሰኙ ላይ የብር መጠን አልተገኘም።", None
+    if not is_cbe and not is_tele:
+        return False, "❌ ስህተት (ደረጃ 1)፦ ደረሰኙ የ CBE ወይም የ Telebirr አይደለም።", None
 
-    # ሐ. ሰዓት ፍተሻ
+    # ደረጃ 2: ቀን እና የ 15 ደቂቃ Rule ቼክ
+    # ቀን ፍተሻ
+    date_match = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text)
+    if date_match:
+        msg_day, msg_month = int(date_match.group(1)), int(date_match.group(2))
+        if msg_day != now.day or msg_month != now.month:
+            return False, f"❌ ስህተት (ደረጃ 2)፦ ደረሰኙ የዛሬ አይደለም። የዛሬውን ይላኩ።", None
+    else:
+        return False, "❌ ስህተት (ደረጃ 2)፦ በደረሰኙ ላይ ቀን አልተገኘም።", None
+
+    # ሰዓት ፍተሻ
     time_match = re.search(r'(\d{1,2}):(\d{2})', text)
     if time_match:
         msg_h, msg_m = int(time_match.group(1)), int(time_match.group(2))
         msg_time = now.replace(hour=msg_h, minute=msg_m, second=0, microsecond=0)
         diff = abs((now - msg_time).total_seconds() / 60)
         if diff > TIME_LIMIT_MINS:
-            return False, f"❌ ጊዜው አልፏል። (ገደቡ {TIME_LIMIT_MINS} ደቂቃ ነው)", None
+            return False, f"❌ ስህተት (ደረጃ 2)፦ የደረሰኙ ሰዓት አልፏል። ከ {int(diff)} ደቂቃ በፊት ነው የተከፈለው።", None
     else:
-        return False, "❌ ስህተት፦ በደረሰኙ ላይ የክፍያ ሰዓት አልተገኘም።", None
-    
+        return False, "❌ ስህተት (ደረጃ 2)፦ በደረሰኙ ላይ ሰዓት አልተገኘም።", None
+
+    # ደረጃ 3: አካውንት እና ስም ቼክ
+    if is_cbe:
+        if MY_CBE_LAST not in text or MY_NAME not in text:
+            return False, f"❌ ስህተት (ደረጃ 3)፦ ደረሰኙ ወደ እኔ አካውንት ({MY_CBE_LAST}) አልተላከም።", None
+    elif is_tele:
+        if MY_PHONE_LAST not in text:
+            return False, f"❌ ስህተት (ደረጃ 3)፦ ደረሰኙ ወደ እኔ ስልክ ({MY_PHONE_LAST}) አልተላከም።", None
+
+    # ደረጃ 4: የዋጋ (SetPrice) ቼክ
+    amounts = re.findall(r'(?:ETB|BIRR|ብር|AMT|AMOUNT)[:\s]*([\d\.]+)', text)
+    if amounts:
+        found_amt = float(amounts[0])
+        if found_amt < SET_PRICE:
+            return False, f"❌ ስህተት (ደረጃ 4)፦ መከፈል ያለበት {SET_PRICE} ብር ነው። የእርስዎ ደረሰኝ ግን {found_amt} ብር ይላል።", None
+    else:
+        return False, "❌ ስህተት (ደረጃ 4)፦ በደረሰኙ ላይ የብር መጠን አልተገኘም።", None
+
+    # ሁሉንም ካለፈ TID አውጥቶ መጨረስ
     tid_match = re.search(r'(?:FT|ID|TXN|TRANS)[:\s]*([A-Z0-9]+)', text)
     tid = tid_match.group(1) if tid_match else "TID" + str(int(time.time()))
-    return True, "Success", tid
+    return True, "✅ ሁሉም መረጃዎች ትክክል ናቸው!", tid
 
-# --- 4. HANDLERS ---
+# --- 4. MESSAGE HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(message):
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add("📖 እንዴት መጫወት ይቻላል?", "📊 ክፍት ቁጥሮችን እይ", "💰 የጨዋታ ዋጋ")
-    bot.send_message(message.chat.id, f"ሰላም {message.from_user.first_name}! 🎰 እንኳን ወደ Fasil Bingo Bot በሰላም መጡ።\n\nለመመዝገብ የባንክ መልዕክቱን (SMS) እዚህ Forward ያድርጉ።", reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(message.chat.id, f"ሰላም {message.from_user.first_name}! 🎰 እንኳን ወደ **Fasil Bingo Bot** በሰላም መጡ።\n\nለመመዝገብ የባንክ ደረሰኝዎን (SMS) እዚህ Forward ያድርጉ።", reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text in ["📖 እንዴት መጫወት ይቻላል?", "📊 ክፍት ቁጥሮችን እይ", "💰 የጨዋታ ዋጋ"])
 def menu_info(message):
@@ -85,19 +106,20 @@ def menu_info(message):
         nums = [str(r['slot_number']) for r in res.data]
         msg = f"📊 ክፍት ቁጥሮች፦\n{', '.join(nums)}" if nums else "ሁሉም ቁጥሮች ተይዘዋል።"
     else:
-        msg = f"💰 የአንድ ቁጥር ዋጋ፦ {SET_PRICE} ብር\n🏦 CBE: 1000584461757\n📱 Telebirr: 0951381356"
-    bot.reply_to(message, msg)
+        msg = f"💰 የአንድ ቁጥር ዋጋ፦ **{SET_PRICE} ብር**\n🏦 CBE: 1000584461757\n📱 Telebirr: 0951381356"
+    bot.reply_to(message, msg, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all(message):
     u_id = message.chat.id
     txt = message.text or ""
 
-    # የባንክ ቃላትን መፈለግ
-    bank_words = ['cbe', 'telebirr', 'ብር', 'transferred', 'credited', 'sent', 'received', 'dash']
-    if any(k in txt.lower() for k in bank_words):
-        bot.reply_to(message, "⏳ ደረሰኙን እያረጋገጥኩ ነው... እባክዎ ይታገሱ።")
-        is_valid, reason, tid = verify_payment(txt)
+    # የባንክ መልዕክት መሆኑን መለየት
+    bank_keywords = ['cbe', 'telebirr', 'ብር', 'transferred', 'credited', 'sent', 'received', 'dash']
+    if any(k in txt.lower() for k in bank_keywords):
+        bot.reply_to(message, "⏳ ደረሰኙን በደረጃ እያረጋገጥኩ ነው... እባክዎ ይታገሱ።")
+        
+        is_valid, reason, tid = verify_payment_sequence(txt)
         if not is_valid:
             bot.reply_to(message, reason)
             return
@@ -114,7 +136,7 @@ def handle_all(message):
             bot.reply_to(message, "⚠️ ዳታቤዝ ላይ ችግር አለ።")
         return
 
-    # ምዝገባ ሂደት
+    # የምዝገባ ሎጂክ (ስም እና ቁጥር መቀበያ)
     if u_id in pending_payments:
         if pending_payments[u_id]["step"] == "name":
             pending_payments[u_id]["name"] = txt
@@ -125,6 +147,7 @@ def handle_all(message):
             if 1 <= num <= 100:
                 name = pending_payments[u_id]["name"]
                 tid = pending_payments[u_id]["tid"]
+                # ዳታቤዝ ማደስ
                 supabase.table("bingo_slots").update({"player_name": name, "is_booked": True}).eq("slot_number", num).execute()
                 supabase.table("used_transactions").insert({"tid": tid, "user_id": str(u_id)}).execute()
                 bot.reply_to(message, f"✅ ቁጥር {num} ተመዝግቧል!")
@@ -134,9 +157,10 @@ def handle_all(message):
                 bot.reply_to(message, "❌ እባክዎ ከ 1-100 ያለ ቁጥር ይላኩ።")
         return
 
+    # የማይታወቅ መልዕክት
     bot.reply_to(message, "⚠️ **ያልታወቀ መልዕክት!**\nለመመዝገብ የባንክ ደረሰኝዎን (SMS) እዚህ Forward ያድርጉ።")
 
-# --- 5. SERVER ---
+# --- 5. SERVER RUN ---
 app = Flask(__name__)
 @app.route('/')
 def home(): return "I am alive!"
