@@ -5,29 +5,31 @@ from datetime import datetime
 from flask import Flask
 from telebot import types
 
-# --- 1. CONFIGURATION (ፋሲል፡ እዚህ ጋር ሁሉንም አስተካክዬዋለሁ) ---
+# --- 1. CONFIGURATION ---
 API_TOKEN = '8721334129:AAHcpUwIywYh_glndRiWWLNryx2CvrjMUFQ'
 ADMIN_ID = 8488592165 
 GROUP_ID = -1003881429974 
 SB_URL = "https://hpdhhomunbpcluuhmila.supabase.co"
-# አንተ የላክኸው አዲሱ ቁልፍ እዚህ ገብቷል
-SB_KEY = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwZGhob211bmJwY2x1dWhtaWxhIiwicm9sZMi6ImFub24iLCJpYXQiOjE3NzMyNDM2MDcsImV4cCI6MjA4ODgxOTYwN30.EIDhhsFaR6Qw5VVobmQs5JYlbJaDBjxWf_F7kM-jEn0"
+SB_KEY = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwZGhob211bmJwY2x1dWhtaWxhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNDM2MDcsImV4cCI6MjA4ODgxOTYwN30.EIDhhsFaR6Qw5VVobmQs5JYlbJaDBjxWf_F7kM-jEn0"
 
 bot = telebot.TeleBot(API_TOKEN)
 supabase: Client = create_client(SB_URL, SB_KEY)
 pending_payments = {}
 admin_states = {}
 
-# --- 💰 DYNAMIC PRICE GETTER ---
+# --- 💰 PRICE GETTER (የተስተካከለ) ---
 def get_current_price():
     try:
+        # ዳታቤዙ ውስጥ ticket_price የሚለውን ቁልፍ ይፈልጋል
         res = supabase.table("settings").select("value").eq("key", "ticket_price").execute()
         if res.data:
             return float(res.data[0]['value'])
+        return 10.0 # ዳታቤዙ ባዶ ከሆነ default 10 ብር
+    except Exception as e:
+        print(f"Price Error: {e}")
         return 10.0
-    except: return 10.0
 
-# --- 🛡️ STRICT VERIFIER ---
+# --- 🛡️ VERIFIER ---
 def verify_payment_strict(text):
     text = text.upper()
     now = datetime.now()
@@ -66,7 +68,7 @@ def admin_menu():
 @bot.message_handler(commands=['start'])
 def start(message):
     u_id = message.from_user.id
-    admin_states[u_id] = None # ስህተት እንዳይደጋገም ማጽዳት
+    admin_states[u_id] = None 
     price = get_current_price()
     welcome = (f"ሰላም {message.from_user.first_name}! 🎰 Fasil Bingo\n\n"
               f"🏦 **CBE:** `1000584461757`\n"
@@ -88,20 +90,13 @@ def ask_price(message):
 @bot.message_handler(func=lambda message: message.text == "🔄 Reset" and message.from_user.id == ADMIN_ID)
 def reset_round(message):
     try:
+        # ሁሉንም ቁጥሮች ክፍት ማድረግ
         supabase.table("bingo_slots").update({"is_booked": False, "player_name": None}).neq("slot_number", 0).execute()
+        # የደረሰኝ ታሪክን ማጽዳት
         supabase.table("used_transactions").delete().neq("tid", "0").execute()
         bot.send_message(ADMIN_ID, "🔄 ሁሉም ቁጥሮች እና ደረሰኞች ጸድተዋል። አዲስ ዙር ተጀምሯል!", reply_markup=admin_menu())
     except Exception as e:
         bot.send_message(ADMIN_ID, f"❌ Reset አልተሳካም፦ {str(e)}")
-
-@bot.message_handler(func=lambda message: message.text == "📊 ሪፖርት" and message.from_user.id == ADMIN_ID)
-def report(message):
-    try:
-        res = supabase.table("bingo_slots").select("slot_number").eq("is_booked", True).execute()
-        count = len(res.data)
-        price = get_current_price()
-        bot.send_message(ADMIN_ID, f"📊 **የዛሬ ሪፖርት**\n\n🎟 የተያዙ ቁጥሮች፦ {count}\n💰 አጠቃላይ ብር፦ {count * price} ብር")
-    except: bot.send_message(ADMIN_ID, "❌ ሪፖርት ማምጣት አልተሳካም።")
 
 # --- 🎰 PROCESS LOGIC ---
 @bot.message_handler(func=lambda message: True)
@@ -109,11 +104,17 @@ def handle_all(message):
     u_id = message.chat.id
     txt = message.text or ""
     
-    # 1. ዋጋ መቀየሪያ
+    # 1. ዋጋ መቀየሪያ (እዚህ ጋር ነው ዳታቤዝ ስህተት የሚለው)
     if admin_states.get(u_id) == "waiting_for_price":
         if txt.isdigit():
             try:
-                supabase.table("settings").upsert({"key": "ticket_price", "value": str(txt)}).execute()
+                # በ Upsert ፋንታ መጀመሪያ Update እንሞክር፣ ካልሆነ Insert
+                check = supabase.table("settings").select("*").eq("key", "ticket_price").execute()
+                if check.data:
+                    supabase.table("settings").update({"value": str(txt)}).eq("key", "ticket_price").execute()
+                else:
+                    supabase.table("settings").insert({"key": "ticket_price", "value": str(txt)}).execute()
+                
                 bot.send_message(u_id, f"✅ የቢንጎ ዋጋ ወደ {txt} ብር ተቀይሯል።", reply_markup=admin_menu())
                 admin_states[u_id] = None
             except Exception as e:
@@ -122,7 +123,6 @@ def handle_all(message):
             bot.send_message(u_id, "❌ እባክዎ ቁጥር ብቻ ያስገቡ።")
         return
 
-    # 2. የቤት መመለሻ
     if txt == "🏠 ወደ ዋና ሜኑ":
         admin_states[u_id] = None
         bot.send_message(u_id, "ወደ ዋና ሜኑ ተመልሰናል", reply_markup=main_menu(u_id))
