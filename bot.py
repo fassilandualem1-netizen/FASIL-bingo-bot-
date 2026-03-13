@@ -5,16 +5,21 @@ from datetime import datetime
 from flask import Flask
 from telebot import types
 
-# --- 1. CONFIGURATION ---
-# ፋሲል፡ API Key እና URL እዚህ ጋር በቋሚነት እንዲቀመጡ ተደርገዋል
+# --- 1. CONFIGURATION (ፋሲል፡ እዚህ ጋር ነው ቁልፉን የቆለፍኩት) ---
 API_TOKEN = '8721334129:AAHcpUwIywYh_glndRiWWLNryx2CvrjMUFQ'
 ADMIN_ID = 8488592165 
 GROUP_ID = -1003881429974 
 SB_URL = "https://hpdhhomunbpcluuhmila.supabase.co"
+
+# በ Render ላይ "Environment" ውስጥ የገባውን ችላ እንዲል ቁልፉን እዚህ ጋር ቀጥታ አስገብቼዋለሁ
 SB_KEY = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwZGhob211bmJwY2x1dWhtaWxhIiwicm9sZMi6ImFub24iLCJpYXQiOjE3NzMyNDM2MDcsImV4cCI6MjA4ODgxOTYwN30.EIDhhsFaR6Qw5VVobmQs5JYlbJaDBjxWf_F7kM-jEn0"
 
+# ለደህንነት ያህል በሁለቱም መንገድ እንዲሞክር (ከኮዱም ከ Render Settingsም)
+FINAL_KEY = os.environ.get('SB_KEY', SB_KEY)
+FINAL_URL = os.environ.get('SB_URL', SB_URL)
+
 bot = telebot.TeleBot(API_TOKEN)
-supabase: Client = create_client(SB_URL, SB_KEY)
+supabase: Client = create_client(FINAL_URL, FINAL_KEY)
 pending_payments = {}
 admin_states = {}
 
@@ -37,7 +42,6 @@ def verify_payment_strict(text):
     if not tid_match: return False, "❌ የግብይት ቁጥር (ID) አልተገኘም።", None, None
     tid = tid_match.group(1)
 
-    # ደረሰኙ ቀደም ብሎ ጥቅም ላይ መዋሉን መፈተሽ
     try:
         used = supabase.table("used_transactions").select("tid").eq("tid", tid).execute()
         if used.data: return False, "❌ ይህ ደረሰኝ ቀደም ብሎ ጥቅም ላይ ውሏል።", None, None
@@ -106,7 +110,6 @@ def handle_all(message):
     if admin_states.get(u_id) == "waiting_for_price":
         if txt.isdigit():
             try:
-                # ቼክ እና Upsert
                 check = supabase.table("settings").select("*").eq("key", "ticket_price").execute()
                 if check.data:
                     supabase.table("settings").update({"value": str(txt)}).eq("key", "ticket_price").execute()
