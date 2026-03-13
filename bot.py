@@ -1,88 +1,127 @@
 import telebot
+from telebot import apihelper
 from supabase import create_client, Client
 import re
 import time
-import math
+from flask import Flask
+import threading
+import os
+import schedule
 
-# --- CONFIGURATION ---
+# --- 1. Flask ለ Render ---
+app = Flask(__name__)
+@app.route('/')
+def health_check(): return "Bot is Active!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# --- 2. CONFIGURATION ---
 API_TOKEN = '8721334129:AAHcpUwIywYh_glndRiWWLNryx2CvrjMUFQ'
 GROUP_ID = -1003881429974
 SB_URL = "https://hpdhhomunbpcluuhmila.supabase.co"
 SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwZGhob211bmJwY2x1dWhtaWxhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNDM2MDcsImV4cCI6MjA4ODgxOTYwN30.EIDhhsFaR6Qw5VVobmQs5JYlbJaDBjxWf_F7kM-jEn0"
 
-# ያንተ መረጃዎች
-MY_NAME = "FASSIL ANDUALEM"
-MY_CBE = "1000584461757"
-MY_TELEBIRR = "0951381356"
-
-bot = telebot.TeleBot(API_TOKEN, threaded=True) # Threaded ለፈጣን ምላሽ
+bot = telebot.TeleBot(API_TOKEN)
 supabase: Client = create_client(SB_URL, SB_KEY)
 
-BET_PRICE = 50 
+MY_NAME, MY_CBE, MY_TELEBIRR = "FASSIL ANDUALEM", "1000584461757", "0951381356"
 pending_payments = {}
 
-@bot.message_handler(commands=['start'])
+# --- 3. አጋዥ ተግባራት ---
+def is_valid_bank_sms(text):
+    text = text.lower()
+    if any(k in text for k in ['recharge', 'airtime', 'ካርድ', 'መሙያ']): return False
+    return any(k in text for k in ['cbe', 'telebirr', 'birr', 'ብር']) and any(x in text for x in [MY_NAME.lower(), MY_CBE, MY_TELEBIRR])
+
+def send_auto_announcement():
+    try:
+        res = supabase.table("bingo_slots").select("slot_number").eq("is_booked", False).execute()
+        count = len(res.data)
+        if count > 0:
+            bot.send_message(GROUP_ID, f"📢 **የአሁኑ ዙር መረጃ**\n\n🎟 የቀሩ ክፍት ቦታዎች፦ {count}\n✅ አሁኑኑ ተመዝግበው እድልዎን ይሞክሩ!\n\nለመመዝገብ @Fasil_Bingo_Bot ን ይጠቀሙ።", parse_mode="Markdown")
+    except: pass
+
+# --- 4. የቦት ትዕዛዞች ---
+
+@bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, f"ሰላም {message.from_user.first_name}! የ FASIL VIP ቢንጎ ረዳት ነኝ። 🎰\n\nለመጫወት የባንክ መልዕክቱን (CBE/Telebirr) እዚህ ላይ Forward ያድርጉ።")
+    bot.reply_to(message, "ሰላም! የ FASIL VIP ቢንጎ ቦት ነው። 🎰\n\n📖 መመሪያ: /howtoplay\n🎟 የቢንጎ ቦርድ: /viewslot\n🎫 የገዙት ቁጥር: /my_tickets\n💰 ለመመዝገብ: የክፍያ መልዕክቱን Forward ያድርጉ።")
+
+@bot.message_handler(commands=['viewslot'])
+def view_slots(message):
+    try:
+        res = supabase.table("bingo_slots").select("slot_number", "is_booked").order("slot_number").execute()
+        board = "🎰 **የቢንጎ ቦርድ (1-100)**\n\n"
+        row_text = ""
+        for i, row in enumerate(res.data):
+            num = row['slot_number']
+            status = "❌" if row['is_booked'] else f"{num:02d}"
+            row_text += f"| {status} "
+            if (i + 1) % 5 == 0:
+                board += row_text + "|\n"
+                row_text = ""
+        bot.reply_to(message, board, parse_mode="Markdown")
+    except: bot.reply_to(message, "⚠️ ቦርዱን ማምጣት አልተቻለም።")
+
+@bot.message_handler(commands=['my_tickets'])
+def my_tickets(message):
+    try:
+        user_name = message.from_user.first_name
+        res = supabase.table("bingo_slots").select("slot_number").eq("player_name", user_name).eq("is_booked", True).execute()
+        tickets = [str(row['slot_number']) for row in res.data]
+        if tickets:
+            bot.reply_to(message, f"🎫 **{user_name}** የገዙት ቁጥሮች፦\n\n" + ", ".join(tickets))
+        else:
+            bot.reply_to(message, "⚠️ እስካሁን ምንም ቁጥር አልገዙም።")
+    except: bot.reply_to(message, "⚠️ መረጃውን ማግኘት አልተቻለም።")
 
 @bot.message_handler(func=lambda message: True)
-def handle_messages(message):
+def handle_all(message):
     user_id = message.chat.id
-    text = message.text if message.text else ""
-    text_lower = text.lower()
+    text = message.text or ""
 
-    # 1. ክፍያ ማረጋገጫ (CBE/Telebirr)
-    is_bank = any(x in text_lower for x in ["cbe", "telebirr", "received", "transferred"])
-    is_for_me = any(x in text_lower for x in [MY_NAME.lower(), MY_CBE, MY_TELEBIRR])
-
-    if is_bank and is_for_me:
-        tid_match = re.search(r'(?:txn|id|ማጣቀሻ)\s*(?:no\.|:)?\s*([a-z0-9]+)', text_lower)
+    if is_valid_bank_sms(text):
+        tid_match = re.search(r'(?i)(?:txn|id|ማጣቀሻ|Ref|Reference)\s*(?:no\.|:)?\s*([a-z0-9]+)', text)
         if tid_match:
             tid = tid_match.group(1).upper()
-            
-            # Duplicate Check (ከዚህ በፊት ጥቅም ላይ መዋሉን ማረጋገጥ)
-            check = supabase.table("used_transactions").select("tid").eq("tid", tid).execute()
-            if check.data:
-                bot.reply_to(message, "❌ ይህ ማጣቀሻ ቁጥር ቀድሞ ጥቅም ላይ ውሏል!")
-                return
-
-            amt_match = re.search(r'(?:etb|ብር|amount)\s*([\d,]+(?:\.\d+)?)', text_lower)
-            if amt_match:
-                amount = float(amt_match.group(1).replace(',', ''))
-                if amount >= (BET_PRICE - 5):
-                    slots_to_buy = math.ceil(amount / BET_PRICE)
-                    # መዝግብ
-                    supabase.table("used_transactions").insert({"tid": tid, "user_id": user_id, "amount": amount}).execute()
-                    pending_payments[user_id] = {"name": message.from_user.first_name, "slots": slots_to_buy}
-                    
-                    bot.reply_to(message, f"✅ የ {amount} ብር ክፍያ ተረጋግጧል! (TID: {tid})\n🎯 እባክዎ {slots_to_buy} ቁጥር/ቁጥሮችን አንድ በአንድ ይላኩ።")
+            try:
+                check = supabase.table("used_transactions").select("tid").eq("tid", tid).execute()
+                if check.data:
+                    bot.reply_to(message, "❌ ይህ ማጣቀሻ ቁጥር ጥቅም ላይ ውሏል!")
                     return
+                supabase.table("used_transactions").insert({"tid": tid, "user_id": user_id}).execute()
+                pending_payments[user_id] = {"name": message.from_user.first_name}
+                bot.reply_to(message, "✅ ክፍያ ተረጋግጧል! አሁን ቁጥር (1-100) ይላኩ።")
+            except: bot.reply_to(message, "⚠️ የዳታቤዝ ስህተት።")
     
-    # 2. ቁጥር መመዝገብ
-    if user_id in pending_payments and text.isdigit():
+    elif user_id in pending_payments and text.isdigit():
         num = int(text)
         if 1 <= num <= 100:
-            # ዳታቤዝ ላይ መኖሩን ቼክ አድርግ
-            check_slot = supabase.table("bingo_slots").select("is_booked").eq("slot_number", num).execute()
-            if check_slot.data and check_slot.data[0]['is_booked']:
-                bot.reply_to(message, f"❌ ቁጥር {num} ተይዟል። እባክዎ ሌላ ይምረጡ።")
-            else:
-                supabase.table("bingo_slots").update({"player_name": pending_payments[user_id]["name"], "is_booked": True}).eq("slot_number", num).execute()
-                pending_payments[user_id]["slots"] -= 1
-                bot.reply_to(message, f"✅ ቁጥር {num} ተመዝግቧል!")
-                
-                if pending_payments[user_id]["slots"] == 0:
-                    bot.send_message(user_id, "🏆 ሁሉንም ቁጥሮች መዝግበው ጨርሰዋል። መልካም እድል!")
-                    bot.send_message(GROUP_ID, f"🎰 አዲስ ተጫዋች፦ {pending_payments[user_id]['name']}\n🎟 የተያዘ ቁጥር፦ {num}")
-                    del pending_payments[user_id]
+            try:
+                check_slot = supabase.table("bingo_slots").select("is_booked").eq("slot_number", num).execute()
+                if check_slot.data and check_slot.data[0]['is_booked']:
+                    bot.reply_to(message, f"❌ ቁጥር {num} ተይዟል።")
                 else:
-                    bot.send_message(user_id, f"ቀሪ {pending_payments[user_id]['slots']} ቁጥር ይላኩ።")
-        else:
-            bot.reply_to(message, "❌ እባክዎ ከ 1 እስከ 100 ያለ ቁጥር ብቻ ይላኩ።")
+                    supabase.table("bingo_slots").update({"player_name": pending_payments[user_id]["name"], "is_booked": True}).eq("slot_number", num).execute()
+                    bot.reply_to(message, f"✅ ቁጥር {num} ተመዝግቧል!")
+                    bot.send_message(GROUP_ID, f"🎰 አዲስ ተጫዋች!\n👤 ስም፦ {pending_payments[user_id]['name']}\n🎟 ቁጥር፦ {num}")
+                    del pending_payments[user_id]
+            except: bot.reply_to(message, "⚠️ ስህተት ተፈጥሯል።")
+    else:
+        bot.reply_to(message, "❌ የተሳሳተ ትዕዛዝ! እባክዎ /help ይጠቀሙ።")
 
-# --- START BOT ---
-while True:
-    try:
-        bot.polling(none_stop=True, interval=0, timeout=20)
-    except:
-        time.sleep(5)
+# --- 5. Background Tasks ---
+def run_scheduler():
+    schedule.every(30).minutes.do(send_auto_announcement)
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(target=run_scheduler, daemon=True).start()
+    while True:
+        try: bot.polling(none_stop=True, timeout=60)
+        except: time.sleep(10)
