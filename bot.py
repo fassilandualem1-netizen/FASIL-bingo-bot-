@@ -1,6 +1,6 @@
 import telebot
 from supabase import create_client, Client
-import re, time, os, threading
+import re, time, os, threading, requests
 from datetime import datetime
 from flask import Flask
 from telebot import types
@@ -16,70 +16,65 @@ bot = telebot.TeleBot(API_TOKEN)
 supabase: Client = create_client(SB_URL, SB_KEY)
 pending_payments = {}
 
-# --- 2. SETTINGS (Flexible) ---
+# --- 2. SETTINGS ---
 SET_PRICE = 30.0            
 TIME_LIMIT_MINS = 15       
 MY_NAME = "FASIL"          
 MY_CBE_LAST = "84461757"   
-MY_PHONE_LAST = "51381356"  
+MY_PHONE_LAST = "51381356"
+RENDER_URL = "https://fasil-bingo-bot-fasil-assistant.onrender.com"
+
+# --- 🚀 ዘላቂ መፍትሄ፡ ቦቱ እንዳይተኛ የሚከላከል (Self-Ping) ---
+def keep_awake():
+    """በየ 5 ደቂቃው ሰርቨሩን በመቀስቀስ እንዳይተኛ ያደርጋል"""
+    while True:
+        try:
+            requests.get(RENDER_URL) 
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 💤 ቦቱ ንቁ ነው! (Pinged every 5 mins)")
+        except Exception as e:
+            print(f"Ping failed: {e}")
+        time.sleep(300) # 5 ደቂቃ
 
 # --- 3. UTILITY FUNCTIONS ---
-
 def verify_payment(text):
-    """የደረሰኝ ጥብቅ ፍተሻ"""
     text = text.upper()
     now = datetime.now()
-
+    
     # ሀ. የስም እና የአካውንት ፍተሻ
     has_my_info = (MY_NAME in text) or (MY_CBE_LAST in text) or (MY_PHONE_LAST in text)
     if not has_my_info:
-        return False, "❌ ስህተት፦ ደረሰኙ ወደ እኔ (Fasil) የተላከ መሆኑን ማረጋገጥ አልተቻለም።", None
-
+        return False, "❌ ስህተት፦ ደረሰኙ ወደ እኔ (Fasil) የተላከ አይደለም።", None
+    
     # ለ. የብር መጠን ፍተሻ
     amounts = re.findall(r'(?:ETB|BIRR|ብር|AMT|AMOUNT)[:\s]*([\d\.]+)', text)
     if amounts:
         found_amt = float(amounts[0])
         if found_amt < SET_PRICE:
-            return False, f"❌ ስህተት፦ መከፈል ያለበት {SET_PRICE} ብር ነው። የላኩት ግን {found_amt} ብር ይላል።", None
+            return False, f"❌ ስህተት፦ መከፈል ያለበት {SET_PRICE} ብር ነው።", None
     else:
-        return False, "❌ ስህተት፦ በደረሰኙ ላይ የክፍያ መጠን አልተገኘም።", None
+        return False, "❌ ስህተት፦ በደረሰኙ ላይ የብር መጠን አልተገኘም።", None
 
-    # ሐ. የቀን ፍተሻ
-    date_match = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text)
-    if date_match:
-        msg_day, msg_month = int(date_match.group(1)), int(date_match.group(2))
-        if msg_day != now.day or msg_month != now.month:
-            return False, "❌ ስህተት፦ ደረሰኙ የዛሬ አይደለም።", None
-
-    # መ. የሰዓት ፍተሻ
+    # ሐ. ሰዓት ፍተሻ
     time_match = re.search(r'(\d{1,2}):(\d{2})', text)
     if time_match:
         msg_h, msg_m = int(time_match.group(1)), int(time_match.group(2))
         msg_time = now.replace(hour=msg_h, minute=msg_m, second=0, microsecond=0)
         diff = abs((now - msg_time).total_seconds() / 60)
         if diff > TIME_LIMIT_MINS:
-            return False, f"❌ ስህተት፦ ደረሰኙ ጊዜው አልፏል። (ገደቡ {TIME_LIMIT_MINS} ደቂቃ ነው)", None
+            return False, f"❌ ጊዜው አልፏል። (ገደቡ {TIME_LIMIT_MINS} ደቂቃ ነው)", None
     else:
         return False, "❌ ስህተት፦ በደረሰኙ ላይ የክፍያ ሰዓት አልተገኘም።", None
-
-    # ሠ. TID ማውጣት
+    
     tid_match = re.search(r'(?:FT|ID|TXN|TRANS)[:\s]*([A-Z0-9]+)', text)
     tid = tid_match.group(1) if tid_match else "TID" + str(int(time.time()))
     return True, "Success", tid
 
 # --- 4. HANDLERS ---
-
 @bot.message_handler(commands=['start'])
 def start(message):
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add("📖 እንዴት መጫወት ይቻላል?", "📊 ክፍት ቁጥሮችን እይ", "💰 የጨዋታ ዋጋ")
-    
-    bot.send_message(
-        message.chat.id, 
-        f"ሰላም {message.from_user.first_name}! 🎰 እንኳን ወደ **Fasil Bingo Bot** መጡ።\n\nለመመዝገብ የባንክ መልዕክቱን (SMS) እዚህ Forward ያድርጉ።",
-        reply_markup=markup, 
-        parse_mode="Markdown"
-    )
+    bot.send_message(message.chat.id, f"ሰላም {message.from_user.first_name}! 🎰 እንኳን ወደ Fasil Bingo Bot በሰላም መጡ።\n\nለመመዝገብ የባንክ መልዕክቱን (SMS) እዚህ Forward ያድርጉ።", reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text in ["📖 እንዴት መጫወት ይቻላል?", "📊 ክፍት ቁጥሮችን እይ", "💰 የጨዋታ ዋጋ"])
 def menu_info(message):
@@ -98,11 +93,10 @@ def handle_all(message):
     u_id = message.chat.id
     txt = message.text or ""
 
-    # 1. የባንክ መልዕክት ሲላክ (Smart Filter)
+    # የባንክ ቃላትን መፈለግ
     bank_words = ['cbe', 'telebirr', 'ብር', 'transferred', 'credited', 'sent', 'received', 'dash']
     if any(k in txt.lower() for k in bank_words):
         bot.reply_to(message, "⏳ ደረሰኙን እያረጋገጥኩ ነው... እባክዎ ይታገሱ።")
-        
         is_valid, reason, tid = verify_payment(txt)
         if not is_valid:
             bot.reply_to(message, reason)
@@ -120,7 +114,7 @@ def handle_all(message):
             bot.reply_to(message, "⚠️ ዳታቤዝ ላይ ችግር አለ።")
         return
 
-    # 2. በምዝገባ ሂደት ውስጥ ከሆነ
+    # ምዝገባ ሂደት
     if u_id in pending_payments:
         if pending_payments[u_id]["step"] == "name":
             pending_payments[u_id]["name"] = txt
@@ -131,7 +125,6 @@ def handle_all(message):
             if 1 <= num <= 100:
                 name = pending_payments[u_id]["name"]
                 tid = pending_payments[u_id]["tid"]
-                # ዳታቤዝ ምዝገባ
                 supabase.table("bingo_slots").update({"player_name": name, "is_booked": True}).eq("slot_number", num).execute()
                 supabase.table("used_transactions").insert({"tid": tid, "user_id": str(u_id)}).execute()
                 bot.reply_to(message, f"✅ ቁጥር {num} ተመዝግቧል!")
@@ -141,14 +134,19 @@ def handle_all(message):
                 bot.reply_to(message, "❌ እባክዎ ከ 1-100 ያለ ቁጥር ይላኩ።")
         return
 
-    # 3. የማይታወቅ መልዕክት ከሆነ (ለማንኛውም ወሬ)
-    bot.reply_to(message, "⚠️ **ያልታወቀ መልዕክት!**\nለመመዝገብ የባንክ ደረሰኝዎን (SMS) እዚህ Forward ያድርጉ። ለሌላ መረጃ ከታች ያሉትን ቁልፎች ይጠቀሙ።")
+    bot.reply_to(message, "⚠️ **ያልታወቀ መልዕክት!**\nለመመዝገብ የባንክ ደረሰኝዎን (SMS) እዚህ Forward ያድርጉ።")
 
 # --- 5. SERVER ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot is Running"
+def home(): return "I am alive!"
 
 if __name__ == "__main__":
+    threading.Thread(target=keep_awake, daemon=True).start()
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000))), daemon=True).start()
-    bot.infinity_polling()
+    
+    while True:
+        try:
+            bot.infinity_polling(timeout=10, long_polling_timeout=5)
+        except Exception:
+            time.sleep(5)
