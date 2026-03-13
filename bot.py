@@ -6,30 +6,28 @@ from flask import Flask
 from telebot import types
 
 # --- 1. CONFIGURATION ---
+# ፋሲል፡ API Key እና URL እዚህ ጋር በቋሚነት እንዲቀመጡ ተደርገዋል
 API_TOKEN = '8721334129:AAHcpUwIywYh_glndRiWWLNryx2CvrjMUFQ'
 ADMIN_ID = 8488592165 
 GROUP_ID = -1003881429974 
 SB_URL = "https://hpdhhomunbpcluuhmila.supabase.co"
-SB_KEY = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwZGhob211bmJwY2x1dWhtaWxhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNDM2MDcsImV4cCI6MjA4ODgxOTYwN30.EIDhhsFaR6Qw5VVobmQs5JYlbJaDBjxWf_F7kM-jEn0"
+SB_KEY = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwZGhob211bmJwY2x1dWhtaWxhIiwicm9sZMi6ImFub24iLCJpYXQiOjE3NzMyNDM2MDcsImV4cCI6MjA4ODgxOTYwN30.EIDhhsFaR6Qw5VVobmQs5JYlbJaDBjxWf_F7kM-jEn0"
 
 bot = telebot.TeleBot(API_TOKEN)
 supabase: Client = create_client(SB_URL, SB_KEY)
 pending_payments = {}
 admin_states = {}
 
-# --- 💰 PRICE GETTER (የተስተካከለ) ---
+# --- 💰 DYNAMIC PRICE GETTER ---
 def get_current_price():
     try:
-        # ዳታቤዙ ውስጥ ticket_price የሚለውን ቁልፍ ይፈልጋል
         res = supabase.table("settings").select("value").eq("key", "ticket_price").execute()
         if res.data:
             return float(res.data[0]['value'])
-        return 10.0 # ዳታቤዙ ባዶ ከሆነ default 10 ብር
-    except Exception as e:
-        print(f"Price Error: {e}")
         return 10.0
+    except: return 10.0
 
-# --- 🛡️ VERIFIER ---
+# --- 🛡️ STRICT VERIFIER ---
 def verify_payment_strict(text):
     text = text.upper()
     now = datetime.now()
@@ -39,8 +37,11 @@ def verify_payment_strict(text):
     if not tid_match: return False, "❌ የግብይት ቁጥር (ID) አልተገኘም።", None, None
     tid = tid_match.group(1)
 
-    used = supabase.table("used_transactions").select("tid").eq("tid", tid).execute()
-    if used.data: return False, "❌ ይህ ደረሰኝ ቀደም ብሎ ጥቅም ላይ ውሏል።", None, None
+    # ደረሰኙ ቀደም ብሎ ጥቅም ላይ መዋሉን መፈተሽ
+    try:
+        used = supabase.table("used_transactions").select("tid").eq("tid", tid).execute()
+        if used.data: return False, "❌ ይህ ደረሰኝ ቀደም ብሎ ጥቅም ላይ ውሏል።", None, None
+    except: pass
 
     price = get_current_price()
     amounts = re.findall(r'(?:ETB|BIRR|ብር|AMT)[:\s]*([\d\.]+)', text)
@@ -68,7 +69,7 @@ def admin_menu():
 @bot.message_handler(commands=['start'])
 def start(message):
     u_id = message.from_user.id
-    admin_states[u_id] = None 
+    admin_states[u_id] = None
     price = get_current_price()
     welcome = (f"ሰላም {message.from_user.first_name}! 🎰 Fasil Bingo\n\n"
               f"🏦 **CBE:** `1000584461757`\n"
@@ -90,9 +91,7 @@ def ask_price(message):
 @bot.message_handler(func=lambda message: message.text == "🔄 Reset" and message.from_user.id == ADMIN_ID)
 def reset_round(message):
     try:
-        # ሁሉንም ቁጥሮች ክፍት ማድረግ
         supabase.table("bingo_slots").update({"is_booked": False, "player_name": None}).neq("slot_number", 0).execute()
-        # የደረሰኝ ታሪክን ማጽዳት
         supabase.table("used_transactions").delete().neq("tid", "0").execute()
         bot.send_message(ADMIN_ID, "🔄 ሁሉም ቁጥሮች እና ደረሰኞች ጸድተዋል። አዲስ ዙር ተጀምሯል!", reply_markup=admin_menu())
     except Exception as e:
@@ -104,11 +103,10 @@ def handle_all(message):
     u_id = message.chat.id
     txt = message.text or ""
     
-    # 1. ዋጋ መቀየሪያ (እዚህ ጋር ነው ዳታቤዝ ስህተት የሚለው)
     if admin_states.get(u_id) == "waiting_for_price":
         if txt.isdigit():
             try:
-                # በ Upsert ፋንታ መጀመሪያ Update እንሞክር፣ ካልሆነ Insert
+                # ቼክ እና Upsert
                 check = supabase.table("settings").select("*").eq("key", "ticket_price").execute()
                 if check.data:
                     supabase.table("settings").update({"value": str(txt)}).eq("key", "ticket_price").execute()
@@ -128,7 +126,6 @@ def handle_all(message):
         bot.send_message(u_id, "ወደ ዋና ሜኑ ተመልሰናል", reply_markup=main_menu(u_id))
         return
 
-    # 3. የደረሰኝ ፍተሻ
     if any(k in txt.lower() for k in ['cbe', 'telebirr', 'ብር', 'dear', 'successfully']):
         is_valid, amt_or_reason, tid, r_date = verify_payment_strict(txt)
         if not is_valid:
@@ -138,7 +135,6 @@ def handle_all(message):
         bot.reply_to(message, "✅ ክፍያ ተረጋግጧል! አሁን ስምዎን ይላኩ።")
         return
 
-    # 4. ምዝገባ መቀጠያ
     if u_id in pending_payments:
         p_data = pending_payments[u_id]
         if p_data["step"] == "name":
