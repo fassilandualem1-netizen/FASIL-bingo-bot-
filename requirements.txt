@@ -1,3 +1,5 @@
 pyTelegramBotAPI
 supabase
+flask
+schedule
 
