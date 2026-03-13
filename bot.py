@@ -23,7 +23,7 @@ def get_current_price():
         res = supabase.table("settings").select("value").eq("key", "ticket_price").execute()
         if res.data:
             return float(res.data[0]['value'])
-        return 10.0 # ዳታቤዙ ላይ ከጠፋ 10 ብር default ይሁን
+        return 10.0
     except: return 10.0
 
 # --- 🛡️ STRICT VERIFIER ---
@@ -69,19 +69,20 @@ def admin_menu():
 # --- 🛰️ HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(message):
-    admin_states[message.from_user.id] = None
+    u_id = message.from_user.id
+    admin_states[u_id] = None
     price = get_current_price()
     welcome = (f"ሰላም {message.from_user.first_name}! 🎰 Fasil Bingo\n\n"
               f"🏦 **CBE:** `1000584461757`\n"
               f"📱 **Telebirr:** `0951381356`\n"
               f"💵 **የአሁኑ ዋጋ:** `{price} ብር`\n\n"
               "👉 ለመመዝገብ ደረሰኙን (SMS) እዚህ **Forward** ያድርጉ።")
-    bot.send_message(message.chat.id, welcome, reply_markup=main_menu(message.from_user.id), parse_mode="Markdown")
+    bot.send_message(message.chat.id, welcome, reply_markup=main_menu(u_id), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text == "⚙️ Admin Panel" and message.from_user.id == ADMIN_ID)
 def admin_panel(message):
     admin_states[ADMIN_ID] = None
-    bot.send_message(ADMIN_ID, "እንኳን ደህና መጡ አድሚን ፋሲል! ምን ማድረግ ይፈልጋሉ?", reply_markup=admin_menu())
+    bot.send_message(ADMIN_ID, "እንኳን ደህና መጡ አድሚን ፋሲል!", reply_markup=admin_menu())
 
 @bot.message_handler(func=lambda message: message.text == "💰 ዋጋ ቀይር" and message.from_user.id == ADMIN_ID)
 def ask_price(message):
@@ -93,8 +94,18 @@ def reset_round(message):
     try:
         supabase.table("bingo_slots").update({"is_booked": False, "player_name": None}).neq("slot_number", 0).execute()
         supabase.table("used_transactions").delete().neq("tid", "0").execute()
-        bot.send_message(ADMIN_ID, "🔄 ሁሉም ቁጥሮች እና ደረሰኞች ጸድተዋል። አዲስ ዙር ተጀምሯል!")
-    except: bot.send_message(ADMIN_ID, "❌ Reset አልተሳካም።")
+        bot.send_message(ADMIN_ID, "🔄 ሁሉም ቁጥሮች እና ደረሰኞች ጸድተዋል። አዲስ ዙር ተጀምሯል!", reply_markup=admin_menu())
+    except Exception as e:
+        bot.send_message(ADMIN_ID, f"❌ Reset አልተሳካም፦ {str(e)}")
+
+@bot.message_handler(func=lambda message: message.text == "📊 ሪፖርት" and message.from_user.id == ADMIN_ID)
+def report(message):
+    try:
+        res = supabase.table("bingo_slots").select("slot_number").eq("is_booked", True).execute()
+        count = len(res.data)
+        price = get_current_price()
+        bot.send_message(ADMIN_ID, f"📊 **የዛሬ ሪፖርት**\n\n🎟 የተያዙ ቁጥሮች፦ {count}\n💰 አጠቃላይ ብር፦ {count * price} ብር")
+    except: bot.send_message(ADMIN_ID, "❌ ሪፖርት ማምጣት አልተሳካም።")
 
 # --- 🎰 PROCESS LOGIC ---
 @bot.message_handler(func=lambda message: True)
@@ -102,19 +113,26 @@ def handle_all(message):
     u_id = message.chat.id
     txt = message.text or ""
     
-    # ዋጋ መቀየሪያ
+    # 1. ዋጋ መቀየሪያ (Strict Order)
     if admin_states.get(u_id) == "waiting_for_price":
         if txt.isdigit():
             try:
                 supabase.table("settings").upsert({"key": "ticket_price", "value": str(txt)}).execute()
                 bot.send_message(u_id, f"✅ የቢንጎ ዋጋ ወደ {txt} ብር ተቀይሯል።", reply_markup=admin_menu())
                 admin_states[u_id] = None
-            except: bot.send_message(u_id, "❌ ዳታቤዝ ላይ መመዝገብ አልተቻለም።")
+            except Exception as e:
+                bot.send_message(u_id, f"❌ ዳታቤዝ ላይ መመዝገብ አልተቻለም፦ {str(e)}")
         else:
             bot.send_message(u_id, "❌ እባክዎ ቁጥር ብቻ ያስገቡ።")
         return
 
-    # የደረሰኝ ፍተሻ
+    # 2. የቤት መመለሻ
+    if txt == "🏠 ወደ ዋና ሜኑ":
+        admin_states[u_id] = None
+        bot.send_message(u_id, "ወደ ዋና ሜኑ ተመልሰናል", reply_markup=main_menu(u_id))
+        return
+
+    # 3. የደረሰኝ ፍተሻ
     if any(k in txt.lower() for k in ['cbe', 'telebirr', 'ብር', 'dear', 'successfully']):
         is_valid, amt_or_reason, tid, r_date = verify_payment_strict(txt)
         if not is_valid:
@@ -124,7 +142,7 @@ def handle_all(message):
         bot.reply_to(message, "✅ ክፍያ ተረጋግጧል! አሁን ስምዎን ይላኩ።")
         return
 
-    # ምዝገባ መቀጠያ
+    # 4. ምዝገባ መቀጠያ
     if u_id in pending_payments:
         p_data = pending_payments[u_id]
         if p_data["step"] == "name":
@@ -148,10 +166,13 @@ def handle_all(message):
 
     if txt == "💰 የጨዋታ ዋጋ":
         bot.reply_to(message, f"💰 ወቅታዊ ዋጋ፦ {get_current_price()} ብር")
-
-    if txt == "🏠 ወደ ዋና ሜኑ":
-        admin_states[u_id] = None
-        bot.send_message(u_id, "ወደ ዋና ሜኑ ተመልሰናል", reply_markup=main_menu(u_id))
+        
+    if txt == "📊 ክፍት ቁጥሮችን እይ":
+        try:
+            res = supabase.table("bingo_slots").select("slot_number").eq("is_booked", False).order("slot_number").execute()
+            slots = [str(s['slot_number']) for s in res.data]
+            bot.send_message(u_id, "📊 **ክፍት ቁጥሮች፦**\n\n" + ", ".join(slots))
+        except: bot.reply_to(message, "❌ መረጃ ማምጣት አልተቻለም።")
 
 app = Flask(__name__)
 @app.route('/')
