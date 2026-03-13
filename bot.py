@@ -5,12 +5,13 @@ from datetime import datetime
 from flask import Flask
 from telebot import types
 
-# --- 1. CONFIGURATION ---
+# --- 1. CONFIGURATION (ፋሲል፡ እዚህ ጋር ሁሉንም አስተካክዬዋለሁ) ---
 API_TOKEN = '8721334129:AAHcpUwIywYh_glndRiWWLNryx2CvrjMUFQ'
 ADMIN_ID = 8488592165 
 GROUP_ID = -1003881429974 
 SB_URL = "https://hpdhhomunbpcluuhmila.supabase.co"
-SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwZGhob211bmJwY2x1dWhtaWxhIiwicm9sZMi6ImFub24iLCJpYXQiOjE3NzMyNDM2MDcsImV4cCI6MjA4ODgxOTYwN30.EIDhhsFaR6Qw5VVobmQs5JYlbJaDBjxWf_F7kM-jEn0"
+# አንተ የላክኸው አዲሱ ቁልፍ እዚህ ገብቷል
+SB_KEY = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwZGhob211bmJwY2x1dWhtaWxhIiwicm9sZMi6ImFub24iLCJpYXQiOjE3NzMyNDM2MDcsImV4cCI6MjA4ODgxOTYwN30.EIDhhsFaR6Qw5VVobmQs5JYlbJaDBjxWf_F7kM-jEn0"
 
 bot = telebot.TeleBot(API_TOKEN)
 supabase: Client = create_client(SB_URL, SB_KEY)
@@ -36,11 +37,6 @@ def verify_payment_strict(text):
     if not tid_match: return False, "❌ የግብይት ቁጥር (ID) አልተገኘም።", None, None
     tid = tid_match.group(1)
 
-    date_match = re.search(r'(\d{2}/\d{2}/\d{4})', text)
-    r_date = date_match.group(1) if date_match else today_date
-    if r_date != today_date:
-        return False, f"❌ ደረሰኙ የቆየ ነው ({r_date})። የዛሬ ብቻ ነው የሚቻለው።", None, None
-
     used = supabase.table("used_transactions").select("tid").eq("tid", tid).execute()
     if used.data: return False, "❌ ይህ ደረሰኝ ቀደም ብሎ ጥቅም ላይ ውሏል።", None, None
 
@@ -52,7 +48,7 @@ def verify_payment_strict(text):
     if "84461757" not in text and "51381356" not in text:
         return False, "❌ ደረሰኙ ወደ ፋሲል አካውንት አልተላከም።", None, None
 
-    return True, amt, tid, r_date
+    return True, amt, tid, today_date
 
 # --- 🏠 KEYBOARDS ---
 def main_menu(user_id):
@@ -70,7 +66,7 @@ def admin_menu():
 @bot.message_handler(commands=['start'])
 def start(message):
     u_id = message.from_user.id
-    admin_states[u_id] = None
+    admin_states[u_id] = None # ስህተት እንዳይደጋገም ማጽዳት
     price = get_current_price()
     welcome = (f"ሰላም {message.from_user.first_name}! 🎰 Fasil Bingo\n\n"
               f"🏦 **CBE:** `1000584461757`\n"
@@ -87,7 +83,7 @@ def admin_panel(message):
 @bot.message_handler(func=lambda message: message.text == "💰 ዋጋ ቀይር" and message.from_user.id == ADMIN_ID)
 def ask_price(message):
     admin_states[ADMIN_ID] = "waiting_for_price"
-    bot.send_message(ADMIN_ID, "እባክዎ አዲሱን ዋጋ ያስገቡ (ለምሳሌ፦ 50)። \n\n⚠️ ቁጥር ብቻ ይላኩ!")
+    bot.send_message(ADMIN_ID, "እባክዎ አዲሱን ዋጋ በቁጥር ብቻ ያስገቡ (ለምሳሌ፦ 50)።")
 
 @bot.message_handler(func=lambda message: message.text == "🔄 Reset" and message.from_user.id == ADMIN_ID)
 def reset_round(message):
@@ -113,7 +109,7 @@ def handle_all(message):
     u_id = message.chat.id
     txt = message.text or ""
     
-    # 1. ዋጋ መቀየሪያ (Strict Order)
+    # 1. ዋጋ መቀየሪያ
     if admin_states.get(u_id) == "waiting_for_price":
         if txt.isdigit():
             try:
@@ -161,7 +157,8 @@ def handle_all(message):
                 bot.send_message(u_id, f"✅ ቁጥር {num} ተመዝግቧል!", reply_markup=main_menu(u_id))
                 bot.send_message(GROUP_ID, f"🎰 አዲስ ተመዝጋቢ፦ {p_data['name']} (ቁጥር {num})")
                 del pending_payments[u_id]
-            except: bot.reply_to(message, "❌ ስህተት ተፈጥሯል።")
+            except Exception as e: 
+                bot.reply_to(message, f"❌ ስህተት፦ {str(e)}")
         return
 
     if txt == "💰 የጨዋታ ዋጋ":
