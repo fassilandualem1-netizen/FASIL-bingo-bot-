@@ -1,2 +1,5 @@
 pyTelegramBotAPI
-Flask
+flask
+supabase
+requests
+gunicorn
