@@ -6,10 +6,10 @@ from threading import Thread
 import time, re, os
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 TOKEN = '8721334129:AAEQQi1RtA6PKqTUg59sThJs6sRm_BnBr68'
 SB_URL = "https://htdqqcrgzmyegpovnppi.supabase.co"
-SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh0ZHFxY3Jnem15ZWdwb3ZucHBpIiwicm9sZMi6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzQyNDIxMiwiZXhwIjoyMDg5MDAwMjEyfQ.qa52FddJte01BIbVJ4P20R7NpfIzPWJtmHc_T2ozeTY"
+SB_KEY = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh0ZHFxY3Jnem15ZWdwb3ZucHBpIiwicm9sZMi6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzQyNDIxMiwiZXhwIjoyMDg5MDAwMjEyfQ.qa52FddJte01BIbVJ4P20R7NpfIzPWJtmHc_T2ozeTY"
 
 bot = telebot.TeleBot(TOKEN)
 supabase: Client = create_client(SB_URL, SB_KEY)
@@ -19,13 +19,13 @@ ADMIN_ID = 8488592165
 GROUP_ID = -1003881429974 
 user_state = {}
 
-# --- 2. KEEP-ALIVE ---
+# --- KEEP-ALIVE (FOR RENDER) ---
 @app.route('/')
-def home(): return "Fasil Bingo Online!"
+def home(): return "Fasil Bingo System Online!"
 def run_flask(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 def keep_alive(): Thread(target=run_flask).start()
 
-# --- 3. HELPERS ---
+# --- DATABASE HELPERS ---
 def get_price():
     try:
         res = supabase.table("settings").select("value").eq("key", "ticket_price").execute()
@@ -54,33 +54,31 @@ def verify_sms(text):
         except: return None, None
     return None, None
 
-# --- 4. BOT HANDLERS ---
+# --- BOT LOGIC ---
 @bot.message_handler(commands=['start'])
 def start(message):
     u_id = str(message.from_user.id)
-    try:
-        supabase.table("users").upsert({"user_id": u_id, "username": message.from_user.username}).execute()
-        
-        if message.chat.id == ADMIN_ID:
-            markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-            markup.add("📊 ሪፖርት", "🔄 Reset", "💰 ዋጋ ቀይር")
-            bot.send_message(message.chat.id, "ሰላም ፋሲል! ቦቱ ከዳታቤዙ ጋር በሚገባ ተናቧል።", reply_markup=markup)
-        else:
-            bal = get_balance(u_id)
-            price = get_price()
-            bot.send_message(message.chat.id, f"🎰 **ፋሲል ቢንጎ**\n\n💵 Wallet፦ **{bal} ብር**\n🎟 የዕጣ ዋጋ፦ **{price} ብር**\n\nለመመዝገብ የባንክ SMS እዚህ ይላኩ። (የ30 ደቂቃ ገደብ አለው)", parse_mode="Markdown")
-    except Exception as e:
-        bot.reply_to(message, "⚠️ ዳታቤዙን ማግኘት አልቻልኩም። እባክዎ ደግመው ይሞክሩ።")
+    # ተጠቃሚውን መመዝገብ
+    supabase.table("users").upsert({"user_id": u_id, "username": message.from_user.username}).execute()
+    
+    if message.chat.id == ADMIN_ID:
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("📊 ሪፖርት", "🔄 Reset", "💰 ዋጋ ቀይር")
+        bot.send_message(message.chat.id, "ሰላም ፋሲል! አድሚን ፓነል ዝግጁ ነው።", reply_markup=markup)
+    else:
+        bal = get_balance(u_id)
+        price = get_price()
+        bot.send_message(message.chat.id, f"🎰 **ፋሲል ቢንጎ**\n\n💵 ቀሪ Wallet፦ **{bal} ብር**\n🎟 የዕጣ ዋጋ፦ **{price} ብር**\n\nለመመዝገብ የባንክ SMS እዚህ ይላኩ።", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: True)
 def handle_text(message):
     u_id = message.chat.id
     txt = message.text
 
-    # --- ADMIN ---
+    # --- ADMIN ACTIONS ---
     if u_id == ADMIN_ID and txt == "🔄 Reset":
         supabase.table("bingo_slots").update({"is_booked": False, "player_name": None}).neq("slot_number", 0).execute()
-        bot.reply_to(message, "✅ ሰሌዳው ጸድቷል!")
+        bot.reply_to(message, "✅ ሰሌዳው ተወልውሏል (Reset)!")
         return
 
     # --- SMS PROCESS ---
@@ -100,10 +98,11 @@ def handle_text(message):
         bot.reply_to(message, f"✅ {amt} ብር Wallet ውስጥ ገብቷል!\nጠቅላላ፦ {new_bal} ብር\n\nአሁን ስምዎን ይላኩ።")
         return
 
-    # --- REGISTRATION ---
+    # --- NAME & PICK ---
     if u_id in user_state and user_state[u_id].get("step") == "name":
         user_state[u_id]["name"] = txt
         user_state[u_id]["step"] = "pick"
+        # ሰሌዳውን አሳይ
         res = supabase.table("bingo_slots").select("slot_number, is_booked").order("slot_number").execute()
         markup = types.InlineKeyboardMarkup(row_width=5)
         btns = [types.InlineKeyboardButton("❌" if r['is_booked'] else f"{r['slot_number']}", 
@@ -129,10 +128,8 @@ def callback_query(call):
         bot.edit_message_text(f"✅ ተመዝግቧል! ቁጥር፦ {num}\nቀሪ፦ {new_bal} ብር", chat_id=u_id, message_id=call.message.message_id)
         bot.send_message(GROUP_ID, f"🎟 አዲስ ምዝገባ፦ {user_state[u_id]['name']} | ቁጥር፦ {num}")
         
-        if new_bal >= price:
-            bot.send_message(u_id, "ሌላ ቁጥር መምረጥ ይችላሉ።", reply_markup=call.message.reply_markup)
-        else:
-            del user_state[u_id]
+        if new_bal < price: del user_state[u_id]
+        else: bot.send_message(u_id, "ሌላ ቁጥር መምረጥ ይችላሉ።")
 
 if __name__ == "__main__":
     keep_alive()
