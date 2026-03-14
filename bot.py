@@ -42,7 +42,7 @@ def get_db_user(uid):
 def update_db_user(uid, data):
     supabase.table("users").update(data).eq("id", str(uid)).execute()
 
-# --- 3. ሰሌዳ (DESIGNED BOARD) ---
+# --- BOARD DESIGN ---
 def generate_board_text():
     state = get_db_state()
     board = state.get('board', {})
@@ -54,10 +54,10 @@ def generate_board_text():
         s_i = str(i)
         if s_i in board:
             name = board[s_i]['display_name'][:5]
-            text += f"{i:02d}.{name}✅🏆🙏 "
+            text += f"{i:02d}.{name}✅ "
         else:
             text += f"{i:02d}.⚪️ "
-        if i % 5 == 0: text += "\n" # አምስት አምስት ቁጥሮች በአንድ መስመር
+        if i % 5 == 0: text += "\n"
     text += "━━━━━━━━━━━━━━━━━━\n"
     text += f"🕹 ለመሳተፍ @Fasil_assistant_bot"
     return text
@@ -97,7 +97,7 @@ def handle_callbacks(call):
 
     elif call.data == "ask_price" and int(uid) == ADMIN_ID:
         update_db_user(uid, {"step": "SET_PRICE"})
-        bot.send_message(uid, "💵 አዲሱን የመደብ ዋጋ በቁጥር ብቻ ይጻፉ (ለምሳሌ: 20)፦")
+        bot.send_message(uid, "💵 አዲሱን የመደብ ዋጋ በቁጥር ብቻ ይጻፉ፦")
 
     elif call.data == "ask_prizes" and int(uid) == ADMIN_ID:
         update_db_user(uid, {"step": "SET_PRIZES"})
@@ -122,14 +122,14 @@ def handle_callbacks(call):
         if u['tickets'] > 0:
             bot.send_message(uid, f"ቀሪ {u['tickets']} እጣ አለዎት። ይምረጡ፦", reply_markup=get_number_markup(state))
 
-# --- PRIVATE HANDLER ---
+# --- PRIVATE MESSAGES ---
 @bot.message_handler(func=lambda m: m.chat.type == 'private')
 def handle_private(message):
     uid = str(message.from_user.id)
     user = get_db_user(uid)
     state = get_db_state()
 
-    # 1. Start ሕግና መመሪያ
+    # 1. መጀመሪያ START እና ዋና በተኖች እንዲሰሩ እናደርጋለን
     if message.text == "/start":
         welcome = (f"👋 **ሰላም {message.from_user.first_name}! እንኳን ወደ ፋሲል ዕጣ በደህና መጡ!** 🎰\n\n"
                    f"📜 **የጨዋታው ሕግጋት:**\n"
@@ -146,7 +146,6 @@ def handle_private(message):
         bot.send_message(uid, welcome, reply_markup=markup, parse_mode="Markdown")
         return
 
-    # 2. Admin Panel Logic
     if message.text == "🛠 Admin Panel" and int(uid) == ADMIN_ID:
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("♻️ Reset Board", callback_data="admin_reset"))
@@ -155,12 +154,13 @@ def handle_private(message):
         bot.send_message(uid, "🛠 **Admin Control Panel**", reply_markup=markup)
         return
 
+    # 2. የአድሚን ስቴፖች (ዋጋና ሽልማት መቀየሪያ)
     if user['step'] == 'SET_PRICE' and int(uid) == ADMIN_ID:
         try:
             state['price'] = int(message.text)
             save_db_state(state); update_db_user(uid, {"step": ""})
-            bot.send_message(uid, f"✅ የመደብ ዋጋ ወደ {message.text} ብር ተቀይሯል።"); update_group_board()
-        except: bot.send_message(uid, "⚠️ እባክዎ ቁጥር ብቻ ያስገቡ!")
+            bot.send_message(uid, f"✅ የመደብ ዋጋ ተቀይሯል።"); update_group_board()
+        except: bot.send_message(uid, "⚠️ ቁጥር ብቻ ያስገቡ!")
         return
 
     if user['step'] == 'SET_PRIZES' and int(uid) == ADMIN_ID:
@@ -169,45 +169,43 @@ def handle_private(message):
             state['current_prizes'] = {"1": p[0], "2": p[1], "3": p[2]}
             save_db_state(state); update_db_user(uid, {"step": ""})
             bot.send_message(uid, f"✅ ሽልማቶች ተቀምጠዋል።")
-        except: bot.send_message(uid, "⚠️ ስህተት! በኮማ ይለዩ (ለምሳሌ: 1000, 500, 200)")
+        except: bot.send_message(uid, "⚠️ በኮማ ይለዩ!")
         return
 
-    # 3. ደረሰኝ ምላሽ
-    if user['step'] == "" and message.text not in ["🕹 ቁጥር ምረጥ", "💰 Wallet"]:
-        # የብር መጠን መፈለጊያ (አንተ ለማጽደቅ እንዲመችህ)
-        amt_match = re.search(r"(\d+)\s*(ብር|ETB)", message.text) or re.search(r"(ብር|ETB)\s*(\d+)", message.text)
-        amt = amt_match.group(1) if amt_match else "20" # ካልተገኘ በዲፎልት 20
+    # 3. የሌሎች ስራዎች (Wallet, Select Number)
+    if message.text == "💰 Wallet":
+        u = get_db_user(uid)
+        bot.send_message(uid, f"📊 **መረጃ:**\n🎟 እጣ: {u['tickets']}\n💵 ዋሌት: {u['wallet']} ETB")
+        return
 
+    if message.text == "🕹 ቁጥር ምረጥ":
+        if user['tickets'] <= 0: bot.send_message(uid, "❌ መጀመሪያ እጣ ይግዙ (ደረሰኝ ይላኩ)።")
+        else: bot.send_message(uid, "ቁጥር ይምረጡ፦", reply_markup=get_number_markup(state))
+        return
+
+    if user['step'] == 'ASK_NAME':
+        update_db_user(uid, {"display_name": message.text, "step": ""})
+        bot.send_message(uid, f"✅ ስም ተመዝግቧል! አሁን ቁጥርዎን ይምረጡ፦", reply_markup=get_number_markup(state))
+        return
+
+    # 4. ደረሰኝ መቀበያ (ከላይ ካሉት ትዕዛዞች ውጭ የሆነ ነገር ሲላክ)
+    if user['step'] == "":
+        amt_match = re.search(r"(\d+)", message.text)
+        amt = amt_match.group(1) if amt_match else str(state['price'])
+        
         bot.send_message(uid, "📩 ደረሰኝዎ ደርሶናል። አድሚን እስኪያረጋግጥ ድረስ እባክዎ በትዕግስት ይጠብቁ።")
         
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("✅ አጽድቅ", callback_data=f"app_{uid}_{amt}"))
-        bot.send_message(ADMIN_ID, f"📩 **አዲስ ደረሰኝ መጥቷል!**\n\n`{message.text}`", reply_markup=markup)
-        return
-
-    # 4. ሌሎቹ ስራዎች
-    if user['step'] == 'ASK_NAME':
-        update_db_user(uid, {"display_name": message.text, "step": ""})
-        bot.send_message(uid, f"✅ ስም ተመዝግቧል! አሁን ቁጥርዎን ይምረጡ፦", reply_markup=get_number_markup(state))
-
-    elif message.text == "🕹 ቁጥር ምረጥ":
-        if user['tickets'] <= 0: bot.send_message(uid, "❌ መጀመሪያ እጣ ይግዙ (ደረሰኝ ይላኩ)።")
-        else: bot.send_message(uid, "ቁጥር ይምረጡ፦", reply_markup=get_number_markup(state))
-
-    elif message.text == "💰 Wallet":
-        u = get_db_user(uid)
-        bot.send_message(uid, f"📊 **መረጃ:**\n🎟 እጣ: {u['tickets']}\n💵 ዋሌት: {u['wallet']} ETB")
+        bot.send_message(ADMIN_ID, f"📩 **አዲስ ደረሰኝ!**\n\nከ: {message.from_user.first_name}\nመልዕክት: `{message.text}`", reply_markup=markup)
 
 # --- SERVER ---
 @app.route('/')
 def home(): return "Bot is Online! 🚀"
 
-def ping_self():
-    while True:
-        try: time.sleep(600); requests.get(RENDER_APP_URL)
-        except: pass
+def run_flask():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 
 if __name__ == "__main__":
-    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))).start()
-    Thread(target=ping_self).start()
+    Thread(target=run_flask).start()
     bot.infinity_polling()
