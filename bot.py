@@ -10,6 +10,7 @@ DB_CHANNEL_ID = -1003747262103
 GROUP_ID = -1003881429974        
 ADMIN_ID = 8488592165            
 MY_NAME = "FASSIL"
+MY_BOT_LINK = "@Fasil_assistant_bot" # ያንተ ቦት ሊንክ
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask('')
@@ -19,15 +20,15 @@ game_data = {
     'price': 20,
     'board': {},                
     'used_txns': set(),
-    'users': {},                # {id: {'tickets': 0, 'wallet': 0, 'display_name': '', 'step': ''}}
+    'users': {},                
     'board_msg_id': None
 }
 
 @app.route('/')
-def home(): return "Fasil Lottery is Online! 🎰"
+def home(): return "Fasil Lottery is Live! 🎰"
 def run_flask(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 
-# --- የቢንጎ ሰሌዳ ጽሁፍ ---
+# --- የቢንጎ ሰሌዳ ጽሁፍ (ሊንኩ ተስተካክሏል) ---
 def generate_board_text():
     text = f"🎰 **እንኳን ወደ ፋሲል ዕጣ በደህና መጡ!** 🎰\n\n"
     text += f"💵 **የአሁኑ መደብ:** `{game_data['price']} ETB`\n"
@@ -37,10 +38,10 @@ def generate_board_text():
             name = game_data['board'][i]['display_name']
             text += f"{i:02d}. ✅ {name}\n"
         else:
-            text += f"{i:02d}. ⚪️ ክፍት  "
-            if i % 3 == 0: text += "\n"
+            text += f"{i:02d}. {i:02d} ⚪️  "
+            if i % 4 == 0: text += "\n"
     text += "\n━━━━━━━━━━━━━━━━━━━━\n"
-    text += "🕹 ለመሳተፍ @FasilBingoBot ላይ ደረሰኝ ይላኩ!"
+    text += f"🕹 ለመሳተፍ ደረሰኝ እዚህ ይላኩ 👉 {MY_BOT_LINK}"
     return text
 
 # --- SMS Parser ---
@@ -61,7 +62,7 @@ def start(message):
            f"📜 **የጨዋታው ሕግጋት:**\n"
            f"• ትክክለኛ የባንክ SMS ብቻ ይላኩ 📩\n"
            f"• ማጭበርበር ከጨዋታው ያስታግዳል (BAN) 🚫\n"
-           f"• የሰርቪስ ክፍያ (ለምሳሌ 2 ብር) ታሳቢ ይደረጋል 💸\n\n"
+           f"• የሰርቪስ ክፍያ ታሳቢ ይደረጋል 💸\n\n"
            f"🏦 **የመክፈያ አካውንቶች (ለመቅዳት ቁጥሩን ይንኩ):**\n"
            f"🔸 CBE: `{1000234567890}` (Fassil A.)\n"
            f"🔸 Telebirr: `{0912345678}` (Fassil A.)\n\n"
@@ -83,7 +84,7 @@ def admin_panel(message):
     markup.add(telebot.types.InlineKeyboardButton("📊 የሁሉንም Wallet እይ", callback_data="admin_view_wallets"))
     bot.send_message(ADMIN_ID, "🛠 **የአድሚን መቆጣጠሪያ ሰሌዳ:**", reply_markup=markup)
 
-# --- SMS HANDLING (Manual Approval + Service Fee Logic) ---
+# --- SMS HANDLING (Manual Approval + Logic) ---
 @bot.message_handler(func=lambda m: m.chat.type == 'private')
 def handle_private(message):
     uid = message.from_user.id
@@ -121,17 +122,15 @@ def handle_private(message):
         admin_msg = f"📩 **አዲስ ደረሰኝ መጥቷል!**\n👤 ስም: {message.from_user.first_name}\n💰 መጠን: {res['amount']} ብር\n📄 TXN: `{res['txn']}`"
         bot.send_message(ADMIN_ID, admin_msg, reply_markup=markup)
 
-# --- CALLBACKS (Approval, Reset, Wallet) ---
+# --- CALLBACKS ---
 @bot.callback_query_handler(func=lambda call: True)
 def callbacks(call):
-    uid = call.from_user.id
     if call.data.startswith("app_"):
         _, target_uid, amount, txn = call.data.split("_")
         target_uid = int(target_uid)
         amount = float(amount)
         
-        # ሒሳብ ስሌት (Service fee logic)
-        # ለምሳሌ 32 ብር ከተላከ 30 ብር ለጨዋታ ይውላል
+        # የሰርቪስ ክፍያ ስሌት (አስርዮሽን ይጥላል)
         playable_amount = (amount // 10) * 10 
         tickets = int(playable_amount // game_data['price'])
         wallet = playable_amount % game_data['price']
@@ -142,18 +141,12 @@ def callbacks(call):
         bot.send_message(target_uid, f"✅ ደረሰኝዎ ተረጋግጧል! {tickets} እጣ አለዎት።\n📍 እባክዎ ሰሌዳው ላይ እንዲወጣ የሚፈልጉትን ስም/ስልክ ይጻፉ፦")
         bot.edit_message_text(f"✅ ተፈቅዷል! ({amount} ETB)", ADMIN_ID, call.message.message_id)
 
-    elif call.data == "admin_view_wallets":
-        report = "📊 **የተጫዋቾች Wallet ዝርዝር:**\n"
-        for user_id, data in game_data['users'].items():
-            report += f"👤 {data.get('display_name', 'ያልታወቀ')}: {data['wallet']} ብር\n"
-        bot.send_message(ADMIN_ID, report if len(game_data['users']) > 0 else "ምንም ዳታ የለም።")
-
     elif call.data == "admin_reset":
         game_data['board'] = {}
         game_data['used_txns'] = set()
-        bot.answer_callback_query(call.id, "♻️ ሰሌዳው ጸድቷል!")
         if game_data['board_msg_id']:
             bot.edit_message_text(generate_board_text(), GROUP_ID, game_data['board_msg_id'], parse_mode="Markdown")
+        bot.answer_callback_query(call.id, "♻️ ሰሌዳው ጸድቷል!")
 
     elif call.data.startswith("n_"):
         uid = call.from_user.id
