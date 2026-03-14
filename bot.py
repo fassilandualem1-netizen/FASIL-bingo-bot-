@@ -24,9 +24,16 @@ game_data = {
 }
 
 @app.route('/')
-def home(): return "Fasil Lottery v7 is Running! 🎰"
+def home(): return "Fasil Lottery v8 - All Fixed! 🎰"
 
-# --- የቢንጎ ሰሌዳ ጽሁፍ ---
+# --- የቁጥር መምረጫ Buttons ---
+def get_number_markup():
+    markup = telebot.types.InlineKeyboardMarkup(row_width=5)
+    btns = [telebot.types.InlineKeyboardButton(str(i), callback_data=f"n_{i}") for i in range(1, 101) if i not in game_data['board']]
+    markup.add(*btns)
+    return markup
+
+# --- የቢንጎ ሰሌዳ ---
 def generate_board_text():
     text = f"🎰 **እንኳን ወደ ፋሲል ዕጣ በደህና መጡ!** 🎰\n\n"
     text += f"💵 **የአሁኑ መደብ:** `{game_data['price']} ETB`\n"
@@ -52,7 +59,7 @@ def parse_sms(text):
         return {"amount": float(amt.group(1).replace(',', '')), "txn": txn.group(1)}
     return None
 
-# --- AUTO WINNER DETECTOR ---
+# --- AUTO WINNER DETECTOR (FROM BOT) ---
 @bot.message_handler(func=lambda m: m.chat.id == GROUP_ID and m.from_user.is_bot)
 def auto_winner_detector(message):
     text = message.text
@@ -81,8 +88,8 @@ def start(message):
     uid = message.from_user.id
     msg = (f"🎰 **እንኳን ወደ ፋሲል ዕጣ መጡ!** 🎰\n\n"
            f"🏦 **አካውንቶች (ለመቅዳት ይጫኑ):**\n"
-           f"🔸 CBE: `1000234567890`\n"
-           f"🔸 Telebirr: `0912345678`\n\n"
+           f"🔸 CBE: `1000234567890` (Fassil)\n"
+           f"🔸 Telebirr: `0912345678` (Fassil)\n\n"
            f"💰 **መደብ:** {game_data['price']} ETB")
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("💰 የኔ ዎሌት (Wallet)", "🎟 ቁጥር ልምረጥ")
@@ -112,55 +119,68 @@ def handle_callbacks(call):
     uid = call.from_user.id
     if call.data == "ask_price" and uid == ADMIN_ID:
         game_data['users'][ADMIN_ID] = {'step': 'SET_PRICE'}
-        bot.send_message(ADMIN_ID, "💵 አዲሱን ዋጋ ይጻፉ፦")
+        bot.send_message(ADMIN_ID, "💵 አዲሱን የመደብ ዋጋ በቁጥር ብቻ ይጻፉ፦")
     elif call.data == "ask_prizes" and uid == ADMIN_ID:
         game_data['users'][ADMIN_ID] = {'step': 'SET_PRIZES'}
-        bot.send_message(ADMIN_ID, "🏆 የ 1ኛ፣ 2ኛ፣ 3ኛ ሽልማት በኮማ ይጻፉ (ለምሳሌ: 1000, 500, 200)፦")
+        bot.send_message(ADMIN_ID, "🏆 ሽልማት በኮማ ይጻፉ (ለምሳሌ: 1000, 500, 200)፦")
     elif call.data == "admin_reset" and uid == ADMIN_ID:
         game_data['board'] = {}; game_data['used_txns'] = set()
         if game_data['board_msg_id']: bot.edit_message_text(generate_board_text(), GROUP_ID, game_data['board_msg_id'], parse_mode="Markdown")
-        bot.answer_callback_query(call.id, "♻️ Reset Done!")
+        bot.answer_callback_query(call.id, "♻️ ሰሌዳው ጸድቷል!")
     elif call.data.startswith("app_"):
         _, t_uid, amt, txn = call.data.split("_")
         t_uid = int(t_uid); tks = int(float(amt) // game_data['price'])
         game_data['used_txns'].add(txn)
-        game_data['users'][t_uid] = {'tickets': tks, 'wallet': 0, 'step': 'ASK_NAME'}
-        bot.send_message(t_uid, f"✅ ጸድቋል! {tks} እጣ አለዎት። ስምዎን ይጻፉ፦")
+        if t_uid not in game_data['users']: game_data['users'][t_uid] = {'wallet': 0, 'tickets': 0}
+        game_data['users'][t_uid]['tickets'] += tks
+        game_data['users'][t_uid]['step'] = 'ASK_NAME'
+        bot.send_message(t_uid, f"✅ ጸድቋል! {tks} እጣ ተጨምሮልዎታል። ሰሌዳ ላይ የሚወጣ ስምዎን ይጻፉ፦")
         bot.edit_message_text(f"✅ የ {amt} ETB ደረሰኝ ጸድቋል", ADMIN_ID, call.message.message_id)
     elif call.data.startswith("n_"):
         num = int(call.data.split("_")[1])
-        if uid not in game_data['users'] or game_data['users'][uid]['tickets'] <= 0: return
+        if uid not in game_data['users'] or game_data['users'][uid]['tickets'] <= 0:
+             bot.answer_callback_query(call.id, "❌ እጣ የሎትም!")
+             return
         game_data['board'][num] = {'display_name': game_data['users'][uid].get('display_name', 'Player'), 'id': uid}
         game_data['users'][uid]['tickets'] -= 1
-        if game_data['board_msg_id']: bot.edit_message_text(generate_board_text(), GROUP_ID, game_data['board_msg_id'], parse_mode="Markdown")
+        if game_data['board_msg_id']: 
+            try: bot.edit_message_text(generate_board_text(), GROUP_ID, game_data['board_msg_id'], parse_mode="Markdown")
+            except: pass
         bot.answer_callback_query(call.id, f"ቁጥር {num} ተመርጧል!")
+        if game_data['users'][uid]['tickets'] > 0:
+            bot.send_message(uid, f"ቀሪ {game_data['users'][uid]['tickets']} እጣ አለዎት። ይጨምሩ፦", reply_markup=get_number_markup())
 
-# --- MESSAGE HANDLER ---
+# --- PRIVATE MESSAGE HANDLER ---
 @bot.message_handler(func=lambda m: m.chat.type == 'private')
 def private_msg(message):
     uid = message.from_user.id
-    u_data = game_data['users'].get(uid, {'wallet':0, 'tickets':0, 'step':''})
+    if uid not in game_data['users']: game_data['users'][uid] = {'wallet':0, 'tickets':0, 'step':''}
+    u_data = game_data['users'][uid]
     
     if message.text == "💰 የኔ ዎሌት (Wallet)":
         bot.send_message(uid, f"📊 **መረጃ:**\n🎟 እጣ: {u_data['tickets']}\n💵 ዋሌት: {u_data['wallet']} ETB")
     elif message.text == "🎟 ቁጥር ልምረጥ":
-        if u_data['tickets'] <= 0: bot.send_message(uid, "❌ እጣ የሎትም!"); return
-        markup = telebot.types.InlineKeyboardMarkup(row_width=5)
-        btns = [telebot.types.InlineKeyboardButton(str(i), callback_data=f"n_{i}") for i in range(1, 101) if i not in game_data['board']]
-        markup.add(*btns)
-        bot.send_message(uid, "ቁጥር ይምረጡ፦", reply_markup=markup)
+        if u_data['tickets'] <= 0: bot.send_message(uid, "❌ መጀመሪያ እጣ ይግዙ።"); return
+        bot.send_message(uid, "እባክዎ ቁጥር ይምረጡ፦", reply_markup=get_number_markup())
     elif u_data.get('step') == 'SET_PRICE':
         game_data['price'] = int(message.text); game_data['users'][uid]['step'] = ''
-        bot.send_message(ADMIN_ID, f"✅ ዋጋ ወደ {message.text} ተቀይሯል።")
+        bot.send_message(ADMIN_ID, f"✅ የመደብ ዋጋ ወደ {message.text} ተቀይሯል።")
     elif u_data.get('step') == 'SET_PRIZES':
         try:
             am = [int(x.strip()) for x in message.text.split(',')]
             game_data['current_prizes'] = {1: am[0], 2: am[1], 3: am[2]}
-            game_data['users'][uid]['step'] = ''; bot.send_message(ADMIN_ID, "✅ ሽልማት ተቀምጧል።")
-        except: bot.send_message(ADMIN_ID, "ስህተት! 1000, 500, 200 በሚል ይጻፉ።")
+            game_data['users'][uid]['step'] = ''; bot.send_message(ADMIN_ID, "✅ የሽልማት መጠን ተቀምጧል።")
+        except: bot.send_message(ADMIN_ID, "⚠️ ስህተት! 1000, 500, 200 በሚል ይጻፉ።")
     elif u_data.get('step') == 'ASK_NAME':
         game_data['users'][uid]['display_name'] = message.text; game_data['users'][uid]['step'] = ''
-        bot.send_message(uid, "✅ ስም ተመዝግቧል! አሁን ቁጥር ይምረጡ።")
+        bot.send_message(uid, f"✅ ስም ተመዝግቧል! አሁን ቁጥር ይምረጡ፦", reply_markup=get_number_markup())
+    elif message.text == "💸 ብር አውጣ (Withdraw)":
+        if u_data['wallet'] < 50: bot.send_message(uid, "❌ ቢያንስ 50 ብር ሊኖርዎት ይገባል።"); return
+        bot.send_message(uid, "📍 ብሩ የሚላክበትን ባንክና አካውንት ይጻፉ፦")
+        game_data['users'][uid]['step'] = 'ASK_BANK'
+    elif u_data.get('step') == 'ASK_BANK':
+        bot.send_message(ADMIN_ID, f"⚠️ **Withdraw Request!**\n💰 {u_data['wallet']} ETB\n🏦 {message.text}\nUID: `{uid}`")
+        u_data['wallet'] = 0; u_data['step'] = ''; bot.send_message(uid, "✅ ጥያቄው ለአድሚን ተልኳል።")
     else:
         res = parse_sms(message.text)
         if res:
