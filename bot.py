@@ -25,135 +25,104 @@ def home(): return "Fasil Bingo Active!"
 def run_flask(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 def keep_alive(): Thread(target=run_flask).start()
 
-# --- 3. HELPERS ---
-def get_user_balance(u_id):
-    try:
-        res = supabase.table("users").select("balance").eq("user_id", str(u_id)).execute()
-        return float(res.data[0]['balance']) if res.data else 0.0
-    except: return 0.0
-
-def get_ticket_price():
-    try:
-        res = supabase.table("settings").select("value").eq("key", "ticket_price").execute()
-        return float(res.data[0]['value']) if res.data else 20.0
-    except: return 20.0 # ዳታቤዙ ባይሰራ እንኳን 20 ብር ይጠቀማል
-
+# --- 3. SMS VERIFICATION LOGIC (GASHA FILTER) ---
 def verify_gasha_sms(text):
     text = text.upper()
     now = datetime.now()
-    tid = re.search(r'(?:ID|TXN|G-|FT)[:\s]*([A-Z0-9]{6,16})', text)
-    amt = re.search(r'(?:BIRR|ETB|ብር|AMT)[:\s]*([\d\.]+)', text)
-    date_m = re.search(r'(\d{2}/\d{2}/\d{4})', text)
-    time_m = re.search(r'(\d{2}:\d{2}(?::\d{2})?)', text)
+    
+    # TID, Amount, Date እና Time መፈለጊያ
+    tid_match = re.search(r'(?:ID|TXN|G-|FT)[:\s]*([A-Z0-9]{6,16})', text)
+    amt_match = re.search(r'(?:BIRR|ETB|ብር|AMT)[:\s]*([\d\.]+)', text)
+    date_match = re.search(r'(\d{2}/\d{2}/\d{4})', text)
+    time_match = re.search(r'(\d{2}:\d{2}(?::\d{2})?)', text)
 
-    if tid and amt and date_m and time_m:
+    if tid_match and amt_match and date_match and time_match:
+        tid = tid_match.group(1)
+        amt = float(amt_match.group(1))
+        
+        # የ SMS ሰዓቱን ወደ Python datetime መቀየር
+        sms_time_str = f"{date_match.group(1)} {time_match.group(1)}"
         try:
-            sms_dt = datetime.strptime(f"{date_m.group(1)} {time_m.group(1)}", "%d/%m/%Y %H:%M:%S" if ":" in time_m.group(1).split(":")[-1] else "%d/%m/%Y %H:%M")
-            if (now - sms_dt) > timedelta(minutes=30): return "EXPIRED", None
-            return tid.group(1), float(amt.group(1))
-        except: return None, None
+            sms_dt = datetime.strptime(sms_time_str, "%d/%m/%Y %H:%M:%S")
+        except:
+            sms_dt = datetime.strptime(sms_time_str, "%d/%m/%Y %H:%M")
+
+        # የ30 ደቂቃ ገደብ ቼክ
+        time_diff = now - sms_dt
+        if time_diff > timedelta(minutes=30) or time_diff < timedelta(seconds=-60):
+            return "EXPIRED", None
+        
+        return tid, amt
     return None, None
 
+# --- 4. BOARD MARKUP ---
 def get_bingo_board_markup():
     markup = types.InlineKeyboardMarkup(row_width=5)
-    try:
-        res = supabase.table("bingo_slots").select("slot_number, is_booked").order("slot_number").execute()
-        btns = [types.InlineKeyboardButton("❌" if r['is_booked'] else f"{r['slot_number']}", 
-                callback_data=f"pick_{r['slot_number']}" if not r['is_booked'] else "booked") for r in res.data]
-        markup.add(*btns)
-    except: pass
+    res = supabase.table("bingo_slots").select("slot_number, is_booked").order("slot_number").execute()
+    btns = [types.InlineKeyboardButton("❌" if r['is_booked'] else f"{r['slot_number']}", 
+            callback_data=f"pick_{r['slot_number']}" if not r['is_booked'] else "booked") for r in res.data]
+    markup.add(*btns)
     return markup
 
-# --- 4. BOT HANDLERS ---
+# --- 5. BOT HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(message):
-    try:
-        u_id = str(message.from_user.id)
-        # ተጠቃሚውን መመዝገብ
-        supabase.table("users").upsert({"user_id": u_id, "username": message.from_user.username}).execute()
-        
-        if message.chat.id == ADMIN_ID:
-            markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-            markup.add("📊 ሪፖርት", "🔄 Reset", "💰 Set Price")
-            bot.send_message(message.chat.id, "ሰላም አድሚን! ስራ ለመጀመር ዝግጁ ነኝ።", reply_markup=markup)
-        else:
-            balance = get_user_balance(u_id)
-            price = get_ticket_price()
-            desc = f"🎰 **እንኳን ወደ ፋሲል ቢንጎ በሰላም መጡ!**\n\n💵 ቀሪ ሂሳብ፦ **{balance} ብር**\n🎟 የዕጣ ዋጋ፦ **{price} ብር**\n\n🏦 **CBE:** `1000XXXXXXXX` \n📲 **Telebirr/Gasha:** `09XXXXXXXX` \n\n⚠️ ለመሳተፍ ከባንክ የደረሰዎትን SMS እዚህ ይላኩ።"
-            bot.send_message(message.chat.id, desc, parse_mode="Markdown")
-    except Exception as e:
-        print(f"Start Error: {e}")
-        bot.send_message(message.chat.id, "ሰላም! ቦቱ ዝግጁ ነው፣ እባክዎ SMS ይላኩ።")
+    if message.chat.id == ADMIN_ID:
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("📊 ሪፖርት", "🔄 Reset", "💰 Set Price")
+        bot.send_message(message.chat.id, "ሰላም አድሚን! ስራ ለመጀመር ዝግጁ ነኝ።", reply_markup=markup)
+    else:
+        res = supabase.table("settings").select("value").eq("key", "ticket_price").execute()
+        price = res.data[0]['value'] if res.data else "20"
+        desc = f"🎰 **ፋሲል ቢንጎ**\n\n💰 ዋጋ፦ **{price} ብር**\n🏦 **CBE:** `1000XXXXXXXX` \n📲 **Telebirr/Gasha:** `09XXXXXXXX` \n\n⚠️ SMS እዚህ ይላኩ። (ደረሰኝ ከ30 ደቂቃ በላይ መቆየት የለበትም)"
+        bot.send_message(message.chat.id, desc, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: True)
-def handle_text(message):
+def handle_messages(message):
     u_id = message.chat.id
     txt = message.text
 
-    # --- ADMIN ACTIONS ---
-    if u_id == ADMIN_ID:
-        if txt == "📊 ሪፖርት":
-            # ሪፖርት logic...
-            bot.reply_to(message, "ሪፖርት እያዘጋጀሁ ነው...")
-            return
-        elif txt == "🔄 Reset":
-            supabase.table("bingo_slots").update({"is_booked": False, "player_name": None}).neq("slot_number", 0).execute()
-            bot.reply_to(message, "ሰሌዳው ጽድቷል።")
-            return
-
-    # --- SMS LOGIC ---
+    # የአድሚን ትዕዛዞች (ሪፖርት፣ Reset ወዘተ እዚህ ይገባሉ...)
+    
+    # የክፍያ SMS ማረጋገጫ
     tid, amt = verify_gasha_sms(txt)
+    
     if tid == "EXPIRED":
-        return bot.reply_to(message, "❌ ደረሰኙ ከ30 ደቂቃ በላይ ስለቆየ አይሰራም።")
+        bot.reply_to(message, "❌ ይቅርታ፣ የላኩት ደረሰኝ ከ30 ደቂቃ በላይ ስለቆየ ወይም የዛሬ ስላልሆነ ተቀባይነት የለውም።")
+        return
     
     if tid:
-        try:
-            check = supabase.table("used_transactions").select("tid").eq("tid", tid).execute()
-            if check.data: return bot.reply_to(message, "❌ ይህ ደረሰኝ ጥቅም ላይ ውሏል!")
-            
-            # Wallet ማሳደግ
-            current_bal = get_user_balance(u_id)
-            new_bal = current_bal + amt
-            supabase.table("users").update({"balance": new_bal}).eq("user_id", str(u_id)).execute()
-            supabase.table("used_transactions").insert({"tid": tid, "user_id": str(u_id), "amount": amt}).execute()
-            
-            user_state[u_id] = {"step": "get_name"}
-            bot.reply_to(message, f"✅ {amt} ብር Wallet ውስጥ ገብቷል!\nጠቅላላ፦ {new_bal} ብር\n\nአሁን ስምዎን ይላኩ።")
-        except:
-            bot.reply_to(message, "❌ ስህተት ተፈጥሯል፣ እባክዎ ደግመው ይሞክሩ።")
+        bot.reply_to(message, "⏳ ደረሰኙን እያረጋገጥኩ ነው...")
+        check = supabase.table("used_transactions").select("tid").eq("tid", tid).execute()
+        if check.data:
+            return bot.reply_to(message, "❌ ይህ ደረሰኝ ቀደም ብሎ ጥቅም ላይ ውሏል!")
+        
+        user_state[u_id] = {"tid": tid, "amt": amt, "step": "get_name", "time": datetime.now()}
+        bot.reply_to(message, "✅ ክፍያዎ ተረጋግጧል! እባክዎ ሙሉ ስምዎን ይላኩ።")
         return
 
-    # --- REGISTRATION ---
-    if u_id in user_state and user_state[u_id].get("step") == "get_name":
+    # ስም መቀበል
+    if u_id in user_state and user_state[u_id]["step"] == "get_name":
         user_state[u_id]["name"] = txt
         user_state[u_id]["step"] = "pick_number"
-        bot.send_message(u_id, f"እሺ {txt}! ቁጥር ይምረጡ፦", reply_markup=get_bingo_board_markup())
+        bot.send_message(u_id, f"እሺ {txt}! አሁን ከሰሌዳው ላይ ቁጥር ይምረጡ፦", reply_markup=get_bingo_board_markup())
 
-# --- 5. CALLBACK (BUTTONS) ---
+# --- 6. CALLBACK (ቁጥር መምረጥ) ---
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     u_id = call.message.chat.id
     if call.data.startswith("pick_") and u_id in user_state:
-        price = get_ticket_price()
-        balance = get_user_balance(u_id)
-        
-        if balance < price:
-            bot.answer_callback_query(call.id, "❌ በቂ ገንዘብ የለም!", show_alert=True)
-            return
-
         num = int(call.data.split("_")[1])
-        new_bal = balance - price
+        state = user_state[u_id]
         
-        # ዳታቤዝ ማስተካከል
-        supabase.table("users").update({"balance": new_bal}).eq("user_id", str(u_id)).execute()
-        supabase.table("bingo_slots").update({"player_name": user_state[u_id]["name"], "is_booked": True}).eq("slot_number", num).execute()
+        # ዳታቤዝ መመዝገብ
+        supabase.table("bingo_slots").update({"player_name": state["name"], "is_booked": True}).eq("slot_number", num).execute()
+        supabase.table("used_transactions").insert({"tid": state["tid"], "user_id": str(u_id), "amount": state["amt"]}).execute()
         
-        bot.edit_message_text(f"✅ ተመዝግቧል! ቁጥር፦ {num}\nቀሪ፦ {new_bal} ብር", chat_id=u_id, message_id=call.message.message_id)
-        bot.send_message(GROUP_ID, f"🎟 አዲስ ምዝገባ፦ {user_state[u_id]['name']} | ቁጥር፦ {num}")
-        
-        if new_bal < price: del user_state[u_id]
-        else: bot.send_message(u_id, "ሌላ ቁጥር መምረጥ ይችላሉ፦", reply_markup=get_bingo_board_markup())
+        bot.edit_message_text(f"✅ ተመዝግቧል! ቁጥር፦ {num}", chat_id=u_id, message_id=call.message.message_id)
+        bot.send_message(GROUP_ID, f"🎟 **አዲስ ምዝገባ!**\n👤 ስም፦ {state['name']}\n🔢 ቁጥር፦ {num}")
+        del user_state[u_id]
 
 if __name__ == "__main__":
     keep_alive()
-    bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    bot.infinity_polling()
