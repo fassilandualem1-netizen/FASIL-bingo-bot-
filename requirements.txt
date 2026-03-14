@@ -1,4 +1,4 @@
 pyTelegramBotAPI
 supabase
 flask
-requests
+postgrest==0.10.6
