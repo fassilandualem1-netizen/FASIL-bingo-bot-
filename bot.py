@@ -1,81 +1,161 @@
 import telebot
-from telebot import types
+import re
+from datetime import datetime, timedelta
 from flask import Flask
 from threading import Thread
 import os
 
+# --- ኮንፊገሬሽን ---
 TOKEN = '8721334129:AAEQQi1RtA6PKqTUg59sThJs6sRm_BnBr68'
-CHANNEL_ID = -1003747262103 
-ADMIN_ID = 8488592165
+DB_CHANNEL_ID = -1003747262103   # ያንተ ዳታቤዝ
+GROUP_ID = -1003881429974        # ቢንጎው የሚካሄድበት ግሩፕ
+ADMIN_ID = 8488592165            # ያንተ ID
+MY_NAME = "Fassil"               # በደረሰኝ ላይ የሚፈለግ ስም
+
 bot = telebot.TeleBot(TOKEN)
-
-# ለጊዜው መረጃን በሜሞሪ ለመያዝ (ቦቱ ሬስታርት ሲያደርግ ከቻናሉ እንዲያነብ እናደርገዋለን)
-user_data = {}
-
 app = Flask('')
+
+# --- የቦቱ ዳታ መያዣ ---
+game_data = {
+    'price': 20,                # መነሻ ዋጋ
+    'board': {},                # ቁጥር የያዙ ሰዎች {1: {'name': '..', 'id': ..}}
+    'users': {},                # የተጫዋቾች Wallet እና ሁኔታ
+    'board_msg_id': None        # ግሩፑ ላይ ያለ የሰሌዳ መልዕክት ID
+}
+
+# --- WEB SERVER (Render እንዳይዘጋው) ---
 @app.route('/')
-def home(): return "Bingo Bot is Running!"
+def home(): return "Gasha Bingo is Online!"
 def run_flask(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 
-# --- የቁጥር መምረጫ ሰሌዳ (Keyboard) ---
-def create_bingo_keyboard():
-    markup = types.InlineKeyboardMarkup(row_width=5)
-    buttons = []
+# --- የቢንጎ ሰሌዳ ቴክስት አዘጋጅ ---
+def generate_board_text():
+    text = f"🎰 **የቢንጎ ሰሌዳ (መደብ: {game_data['price']} ብር)** 🎰\n"
+    text += "————————————————\n"
     for i in range(1, 101):
-        buttons.append(types.InlineKeyboardButton(str(i), callback_data=f"num_{i}"))
-    markup.add(*buttons)
-    return markup
+        if i in game_data['board']:
+            user = game_data['board'][i]
+            text += f"{i}. ✅ {user['name']}  "
+        else:
+            text += f"{i}. ⚪️  "
+        if i % 4 == 0: text += "\n"
+    text += "\n————————————————\n⚠️ ለመሳተፍ ደረሰኝ ለቦቱ በውስጥ መስመር ይላኩ።"
+    return text
 
+# --- SMS VERIFICATION (CBE & Telebirr) ---
+def parse_sms(text):
+    text_upper = text.upper()
+    # ስም ቼክ (ያንተ ስም መኖሩን)
+    if MY_NAME.upper() not in text_upper: return None
+    
+    # ሰዓት ቼክ (30 ደቂቃ)
+    # ማሳሰቢያ፡ በሰርቨር ሰዓት ልዩነት ምክንያት ለጊዜው በ ቴክስት ብቻ እንለየው
+    
+    # Amount & TXN ID
+    amount = re.search(r"ETB\s*([\d,]+\.\d{2})", text) or re.search(r"([\d,]+\.\d{2})\s*ብር", text)
+    txn = re.search(r"DCA[A-Z0-9]+", text) or re.search(r"FT[A-Z0-9]+", text)
+
+    if amount and txn:
+        val = float(amount.group(1).replace(',', ''))
+        return {"amount": val, "txn": txn.group(0)}
+    return None
+
+# --- START COMMAND ---
 @bot.message_handler(commands=['start'])
 def start(message):
-    welcome = (f"🎰 **እንኳን ወደ ፋሲል ቢንጎ መጡ!**\n\n"
-               f"🎟 የዕጣ ዋጋ፦ **20 ብር**\n"
-               "⚠️ ለመሳተፍ መጀመሪያ የባንክ ደረሰኝ (SMS) እዚህ ይላኩ።")
-    bot.send_message(message.chat.id, welcome, parse_mode="Markdown")
+    if message.chat.type == 'private':
+        welcome = (f"እንኳን ወደ ጋሻ ቢንጎ መጡ! 👋\n\n"
+                   f"የአሁኑ መደብ፦ **{game_data['price']} ብር**\n"
+                   f"ለመሳተፍ የባንክ SMS እዚህ ይላኩ።")
+        bot.send_message(message.chat.id, welcome, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: True)
-def handle_text(message):
-    user_id = message.from_user.id
-    text = message.text
-
-    # 1. ደረሰኝ ሲላክ
-    if any(word in text.upper() for word in ["RECEIVED", "ETB", "ብር", "CBE"]):
-        user_data[user_id] = {'step': 'name', 'sms': text}
-        bot.reply_to(message, "✅ ደረሰኙ ታይቷል! አሁን በሰሌዳው ላይ የሚወጣውን **ሙሉ ስምዎን** ይላኩ።")
+# --- ADMIN COMMANDS ---
+@bot.message_handler(commands=['setprice', 'reset', 'board'])
+def admin_cmds(message):
+    if message.from_user.id != ADMIN_ID: return
     
-    # 2. ስም ሲላክ
-    elif user_id in user_data and user_data[user_id].get('step') == 'name':
-        user_data[user_id]['name'] = text
-        user_data[user_id]['step'] = 'number'
-        bot.send_message(message.chat.id, f"ደስ የሚል ነው {text}! አሁን የሚፈልጉትን ቁጥር ይምረጡ፡", 
-                         reply_markup=create_bingo_keyboard())
-
-# --- ቁጥር ሲመረጥ ---
-@bot.callback_query_handler(func=lambda call: call.data.startswith("num_"))
-def pick_number(call):
-    user_id = call.from_user.id
-    num = call.data.split("_")[1]
-
-    if user_id in user_data and user_data[user_id].get('step') == 'number':
-        name = user_data[user_id]['name']
-        sms = user_data[user_id]['sms']
-
-        # ወደ ዳታቤዝ ቻናል መላክ (በሰንጠረዥ መልክ)
-        db_entry = (
-            f"📌 **አዲስ ምዝገባ**\n"
-            f"👤 ስም፦ {name}\n"
-            f"🔢 ቁጥር፦ {num}\n"
-            f"🆔 UserID: `{user_id}`\n"
-            f"📝 SMS፦ {sms[:50]}..."
-        )
-        bot.send_message(CHANNEL_ID, db_entry, parse_mode="Markdown")
+    cmd = message.text.split()
+    if '/setprice' in cmd[0] and len(cmd) > 1:
+        game_data['price'] = int(cmd[1])
+        bot.reply_to(message, f"✅ የመደብ ዋጋ ወደ {cmd[1]} ብር ተቀይሯል።")
         
-        # ለተጫዋቹ ማረጋገጫ
-        bot.edit_message_text(f"✅ ተሳክቷል! ቁጥር **{num}** ለስምዎ ({name}) ተመዝግቧል። መልካም ዕድል!", 
-                              call.message.chat.id, call.message.message_id)
-        del user_data[user_id] # ዳታውን ከሜሞሪ አጽዳ
+    elif '/board' in cmd[0]:
+        msg = bot.send_message(GROUP_ID, generate_board_text(), parse_mode="Markdown")
+        game_data['board_msg_id'] = msg.message_id
+        bot.pin_chat_message(GROUP_ID, msg.message_id)
+        
+    elif '/reset' in cmd[0]:
+        game_data['board'] = {}
+        bot.reply_to(message, "♻️ ሰሌዳው በሙሉ ጸድቷል።")
+        if game_data['board_msg_id']:
+            bot.edit_message_text(generate_board_text(), GROUP_ID, game_data['board_msg_id'], parse_mode="Markdown")
+
+# --- SMS & NAME HANDLING ---
+@bot.message_handler(func=lambda m: m.chat.type == 'private')
+def handle_all(message):
+    uid = message.from_user.id
+    
+    # ደረሰኝ ከሆነ
+    sms_data = parse_sms(message.text)
+    if sms_data:
+        tickets = int(sms_data['amount'] // game_data['price'])
+        wallet = sms_data['amount'] % game_data['price']
+        
+        game_data['users'][uid] = {
+            'name': message.from_user.first_name,
+            'tickets': tickets,
+            'wallet': wallet,
+            'txn': sms_data['txn'],
+            'step': 'PICK'
+        }
+        
+        markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("ቁጥር ልምረጥ")
+        bot.send_message(uid, f"✅ ደረሰኝ ተረጋግጧል!\n🎫 እጣ ብዛት፦ {tickets}\n💰 ዎሌት፦ {wallet} ብር\n\nአሁን 'ቁጥር ልምረጥ' የሚለውን ይጫኑ።", reply_markup=markup)
+        return
+
+    # ቁጥር መምረጥ
+    if message.text == "ቁጥር ልምረጥ" and uid in game_data['users']:
+        markup = telebot.types.InlineKeyboardMarkup(row_width=5)
+        btns = [telebot.types.InlineKeyboardButton(str(i), callback_data=f"num_{i}") for i in range(1, 101)]
+        markup.add(*btns)
+        bot.send_message(uid, "የሚፈልጉትን ቁጥር ይምረጡ፦", reply_markup=markup)
+
+# --- CALLBACK (ቁጥር ሲመረጥ) ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith("num_"))
+def pick_num(call):
+    uid = call.from_user.id
+    num = int(call.data.split("_")[1])
+    
+    if uid not in game_data['users'] or game_data['users'][uid]['tickets'] <= 0:
+        bot.answer_callback_query(call.id, "መጀመሪያ ይክፈሉ ወይም እጣ አልቆብዎታል።")
+        return
+
+    if num in game_data['board']:
+        bot.answer_callback_query(call.id, "ይህ ቁጥር ተይዟል! ሌላ ይምረጡ።", show_alert=True)
+        return
+
+    # ይመዝገብ
+    user = game_data['users'][uid]
+    game_data['board'][num] = {'name': user['name'], 'id': uid}
+    user['tickets'] -= 1
+    
+    # ወደ ዳታቤዝ ቻናል መላክ
+    db_msg = (f"🎰 **አዲስ ምዝገባ**\n👤 ስም: [{user['name']}](tg://user?id={uid})\n🔢 ቁጥር: {num}\n"
+              f"📄 ደረሰኝ: `{user['txn']}`")
+    bot.send_message(DB_CHANNEL_ID, db_msg, parse_mode="Markdown")
+    
+    # ግሩፑ ላይ ያለውን ቦርድ አፕዴት ማድረግ
+    if game_data['board_msg_id']:
+        try:
+            bot.edit_message_text(generate_board_text(), GROUP_ID, game_data['board_msg_id'], parse_mode="Markdown")
+        except: pass
+
+    if user['tickets'] > 0:
+        bot.send_message(uid, f"✅ ቁጥር {num} ተይዟል! ቀሪ {user['tickets']} እጣ አለዎት። ቀጣይ ቁጥር ይምረጡ።")
     else:
-        bot.answer_callback_query(call.id, "⚠️ እባክዎ መጀመሪያ ደረሰኝ ይላኩ።")
+        bot.send_message(uid, f"✅ ቁጥር {num} ተይዟል! ሁሉንም እጣዎች ጨርሰዋል። መልካም ዕድል!")
+        del game_data['users'][uid]
 
 if __name__ == "__main__":
     Thread(target=run_flask).start()
