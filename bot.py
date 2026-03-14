@@ -14,15 +14,18 @@ SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 GROUP_ID = -1003881429974        
 ADMIN_ID = 8488592165            
 
+# አንተ የላክኸው የሬንደር ሊንክ (ቦቱ እንዳይተኛ ለመቀስቀስ)
+RENDER_APP_URL = "https://fasil-bingo.onrender.com" 
+
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- SUPABASE DATABASE WRAPPERS ---
+# --- DB WRAPPERS ---
 def get_db_state():
     try:
         res = supabase.table("game_state").select("value").eq("key", "current_game").execute()
-        return res.data[0]['value'] if res.data else {"price": 20, "board": {}, "board_msg_id": None, "current_prizes": {"1": 0, "2": 0, "3": 0}}
+        return res.data[0]['value']
     except:
         return {"price": 20, "board": {}, "board_msg_id": None, "current_prizes": {"1": 0, "2": 0, "3": 0}}
 
@@ -33,7 +36,7 @@ def get_db_user(uid):
     uid = str(uid)
     res = supabase.table("users").select("*").eq("id", uid).execute()
     if not res.data:
-        new_user = {"id": uid, "wallet": 0, "tickets": 0, "display_name": "Player", "step": ""}
+        new_user = {"id": uid, "wallet": 0, "tickets": 0, "display_name": "Player", "step": "", "temp_amt": 0}
         supabase.table("users").insert(new_user).execute()
         return new_user
     return res.data[0]
@@ -41,60 +44,53 @@ def get_db_user(uid):
 def update_db_user(uid, data):
     supabase.table("users").update(data).eq("id", str(uid)).execute()
 
-# --- HELPERS ---
+# --- ማራኪ የሰሌዳ ዲዛይን ---
 def generate_board_text():
     state = get_db_state()
-    text = f"🎰 **እንኳን ወደ ፋሲል ዕጣ በደህና መጡ!** 🎰\n\n"
-    text += f"💵 **የአሁኑ መደብ:** `{state['price']} ETB`\n"
-    text += "━━━━━━━━━━━━━━━━━━━━\n"
     board = state.get('board', {})
+    text = f"🎰 **እንኳን ወደ ፋሲል ዕጣ በደህና መጡ!** 🎰\n\n"
+    text += f"💵 **የአሁኑ መደብ:** `{state['price']} ETB` 🏆\n"
+    text += "━━━━━━━━━━━━━━━━━━━━\n"
     for i in range(1, 101):
         s_i = str(i)
         if s_i in board:
-            name = board[s_i]['display_name']
-            text += f"{i:02d}.✅{name[:5]} "
+            name = board[s_i]['display_name'][:6]
+            text += f"{i:02d}.{name}✅🏆🙏 "
         else:
             text += f"{i:02d}.⚪️ "
-        if i % 4 == 0: text += "\n"
+        if i % 3 == 0: text += "\n"
     text += "\n━━━━━━━━━━━━━━━━━━━━\n"
-    text += f"🕹 ለመሳተፍ ደረሰኝ እዚህ ይላኩ 👉 @Fasil_assistant_bot"
+    text += f"🕹 ለመሳተፍ @Fasil_assistant_bot"
     return text
 
 def update_group_board():
     state = get_db_state()
+    text = generate_board_text()
     try:
         if state.get('board_msg_id'):
-            bot.edit_message_text(generate_board_text(), GROUP_ID, state['board_msg_id'], parse_mode="Markdown")
+            bot.edit_message_text(text, GROUP_ID, state['board_msg_id'], parse_mode="Markdown")
         else:
-            new_msg = bot.send_message(GROUP_ID, generate_board_text(), parse_mode="Markdown")
-            state['board_msg_id'] = new_msg.message_id
+            msg = bot.send_message(GROUP_ID, text, parse_mode="Markdown")
+            state['board_msg_id'] = msg.message_id
             save_db_state(state)
     except:
-        new_msg = bot.send_message(GROUP_ID, generate_board_text(), parse_mode="Markdown")
-        state['board_msg_id'] = new_msg.message_id
+        msg = bot.send_message(GROUP_ID, text, parse_mode="Markdown")
+        state['board_msg_id'] = msg.message_id
         save_db_state(state)
 
-def get_number_markup():
-    state = get_db_state()
-    board = state.get('board', {})
-    markup = telebot.types.InlineKeyboardMarkup(row_width=5)
-    btns = [telebot.types.InlineKeyboardButton(str(i), callback_data=f"n_{i}") for i in range(1, 101) if str(i) not in board]
-    markup.add(*btns)
-    return markup
-
-# --- AUTO WINNER DETECTOR (Your Logic) ---
-@bot.message_handler(func=lambda m: m.chat.id == GROUP_ID and m.from_user.is_bot)
+# --- AUTO WINNER (BOT ONLY) ---
+@bot.message_handler(func=lambda m: m.chat.id == GROUP_ID)
 def auto_winner_detector(message):
+    if not message.from_user.is_bot: return 
     state = get_db_state()
     text = message.text
-    first = re.search(r"🥇 1ኛ ዕጣ፦ (\d+)", text)
-    second = re.search(r"🥈 2ኛ ዕጣ፦ (\d+)", text)
-    third = re.search(r"🥉 3ኛ ዕጣ፦ (\d+)", text)
-    
     results = []
-    if first: results.append((1, first.group(1)))
-    if second: results.append((2, second.group(1)))
-    if third: results.append((3, third.group(1)))
+    f = re.search(r"🥇 1ኛ ዕጣ፦ (\d+)", text)
+    s = re.search(r"🥈 2ኛ ዕጣ፦ (\d+)", text)
+    t = re.search(r"🥉 3ኛ ዕጣ፦ (\d+)", text)
+    if f: results.append((1, f.group(1)))
+    if s: results.append((2, s.group(1)))
+    if t: results.append((3, t.group(1)))
 
     for rank, num in results:
         board = state.get('board', {})
@@ -103,9 +99,9 @@ def auto_winner_detector(message):
             prize = state['current_prizes'].get(str(rank), 0)
             markup = telebot.types.InlineKeyboardMarkup()
             markup.add(telebot.types.InlineKeyboardButton(f"💰 {prize} ብር ክፈል", callback_data=f"win_{winner_uid}_{prize}_{rank}"))
-            bot.send_message(ADMIN_ID, f"🏆 **አሸናፊ ተገኝቷል!**\n🎖 {rank}ኛ ዕጣ (ቁጥር {num})\n👤 ስም: {board[num]['display_name']}\n💰 ሽልማት: {prize} ETB", reply_markup=markup)
+            bot.send_message(ADMIN_ID, f"🏆 **አሸናፊ ተገኝቷል!**\n🎖 {rank}ኛ ዕጣ ({num})\n👤 ስም: {board[num]['display_name']}", reply_markup=markup)
 
-# --- CALLBACKS ---
+# --- HANDLERS ---
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     uid = str(call.from_user.id)
@@ -114,8 +110,7 @@ def handle_callbacks(call):
 
     if call.data == "admin_reset" and int(uid) == ADMIN_ID:
         state['board'] = {}
-        save_db_state(state)
-        update_group_board()
+        save_db_state(state); update_group_board()
         bot.answer_callback_query(call.id, "♻️ ሰሌዳው ታድሷል!")
 
     elif call.data.startswith("win_"):
@@ -123,7 +118,7 @@ def handle_callbacks(call):
         w_user = get_db_user(w_uid)
         update_db_user(w_uid, {"wallet": w_user['wallet'] + int(amt)})
         bot.send_message(w_uid, f"🎊 እንኳን ደስ አለዎት! የ {rank}ኛ አሸናፊ በመሆንዎ የ {amt} ብር ሽልማት ዋሌትዎ ላይ ተደምሯል!")
-        bot.edit_message_text(f"✅ ለ {w_uid} {amt} ብር ተከፍሏል", ADMIN_ID, call.message.message_id)
+        bot.edit_message_text(f"✅ ተከፍሏል ({amt} ብር)", ADMIN_ID, call.message.message_id)
 
     elif call.data.startswith("app_"):
         _, t_uid, amt, txn = call.data.split("_")
@@ -131,8 +126,8 @@ def handle_callbacks(call):
         change = float(amt) % state['price']
         t_user = get_db_user(t_uid)
         update_db_user(t_uid, {"tickets": t_user['tickets'] + num_tks, "wallet": t_user['wallet'] + change, "step": "ASK_NAME"})
-        bot.send_message(t_uid, f"✅ ደረሰኝ ጸድቋል!\n🎟 እጣ፡ {num_tks}\n💵 ትርፍ፡ {change} ETB\n\nአሁን ሰሌዳ ላይ የሚወጣ ስምዎን ይጻፉ፦")
-        bot.edit_message_text(f"✅ ጸድቋል ({amt} ETB)", ADMIN_ID, call.message.message_id)
+        bot.send_message(t_uid, "✅ ደረሰኝ ጸድቋል! አሁን ሰሌዳ ላይ የሚወጣ ስምዎን ይጻፉ፦")
+        bot.delete_message(ADMIN_ID, call.message.message_id)
 
     elif call.data.startswith("n_"):
         num = call.data.split("_")[1]
@@ -142,9 +137,12 @@ def handle_callbacks(call):
         update_db_user(uid, {"tickets": user['tickets'] - 1})
         update_group_board()
         bot.answer_callback_query(call.id, f"✅ ቁጥር {num} ተይዟል!")
-        new_u = get_db_user(uid)
-        if new_u['tickets'] > 0:
-            bot.send_message(uid, f"ቀሪ {new_u['tickets']} እጣ አለዎት። ይምረጡ፦", reply_markup=get_number_markup())
+        u = get_db_user(uid)
+        if u['tickets'] > 0:
+            markup = telebot.types.InlineKeyboardMarkup(row_width=5)
+            btns = [telebot.types.InlineKeyboardButton(str(i), callback_data=f"n_{i}") for i in range(1, 101) if str(i) not in state['board']]
+            markup.add(*btns)
+            bot.send_message(uid, f"ቀሪ {u['tickets']} እጣ አለዎት። ይምረጡ፦", reply_markup=markup)
 
     elif call.data == "ask_price":
         update_db_user(uid, {"step": "SET_PRICE"})
@@ -152,7 +150,7 @@ def handle_callbacks(call):
 
     elif call.data == "ask_prizes":
         update_db_user(uid, {"step": "SET_PRIZES"})
-        bot.send_message(uid, "🏆 ሽልማቶችን በኮማ ይጻፉ (1000, 500, 200)፦")
+        bot.send_message(uid, "🏆 ሽልማቶችን በኮማ ይጻፉ (ለምሳሌ: 1000, 500, 200)፦")
 
 # --- PRIVATE MESSAGES ---
 @bot.message_handler(func=lambda m: m.chat.type == 'private')
@@ -165,19 +163,32 @@ def handle_private(message):
     if txn:
         amt_match = re.search(r"(\d+)\s*(ብር|ETB)", message.text) or re.search(r"(ብር|ETB)\s*(\d+)", message.text)
         amt = amt_match.group(1) if amt_match and amt_match.group(1).isdigit() else "0"
+        
+        if float(amt) < state['price']:
+            bot.send_message(uid, f"❌ የላኩት መጠን ({amt} ብር) ከመደቡ ዋጋ ያነሰ በመሆኑ ተቀባይነት የለውም።")
+            return
+
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("✅ አጽድቅ", callback_data=f"app_{uid}_{amt}_{txn.group(0)}"))
-        bot.send_message(ADMIN_ID, f"📩 **ደረሰኝ!**\n💰 {amt} ETB\n📄 TXN: `{txn.group(0)}`", reply_markup=markup)
-        bot.send_message(uid, "📩 ደረሰኝዎ ደርሶናል። አድሚን እስኪያጸድቅ ድረስ ይጠብቁ።")
+        bot.send_message(ADMIN_ID, f"📩 **አዲስ ደረሰኝ!**\n💰 {amt} ETB\n📄 TXN: `{txn.group(0)}`", reply_markup=markup)
+        bot.send_message(uid, "📩 ደረሰኝዎ ደርሶናል። አድሚን እስኪያጸድቅ ይጠብቁ።")
         return
 
     if message.text == "/start":
-        msg = f"👋 **እንኳን ወደ ፋሲል ዕጣ በደህና መጡ! 🎰**\n\n💰 **የአሁኑ መደብ:** {state['price']} ብር"
+        welcome = (f"👋 **እንኳን ወደ ፋሲል ዕጣ በደህና መጡ! 🎰**\n\n"
+                   f"📜 **የጨዋታው ሕግጋት:**\n"
+                   f"1️⃣ ትክክለኛ የባንክ SMS ብቻ ይላኩ።\n"
+                   f"2️⃣ የቆየ ደረሰኝ መላክ ከጨዋታው ያስታግዳል።\n\n"
+                   f"💰 **ክፍያ መፈጸም ያለባቸው አካውንቶች:**\n"
+                   f"🔸 **CBE:** `1000584461757` (Fassil A.)\n"
+                   f"🔸 **Telebirr:** `0951381356` (Fassil A.)\n\n"
+                   f"💵 **የአሁኑ መደብ:** {state['price']} ብር\n"
+                   f"አሁን ደረሰኝዎን እዚህ ይላኩ 👇")
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("💰 የኔ ዎሌት (Wallet)", "🕹 ቁጥር ምረጥ")
+        markup.add("💰 Wallet", "🕹 ቁጥር ምረጥ")
         markup.add("💸 ብር አውጣ (Withdraw)")
         if int(uid) == ADMIN_ID: markup.add("🛠 Admin Panel")
-        bot.send_message(uid, msg, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(uid, welcome, reply_markup=markup, parse_mode="Markdown")
 
     elif message.text == "🛠 Admin Panel" and int(uid) == ADMIN_ID:
         markup = telebot.types.InlineKeyboardMarkup()
@@ -189,42 +200,64 @@ def handle_private(message):
     elif user['step'] == 'SET_PRICE' and int(uid) == ADMIN_ID:
         try:
             state['price'] = int(message.text)
-            save_db_state(state)
-            update_db_user(uid, {"step": ""})
-            bot.send_message(uid, f"✅ ዋጋ ወደ {message.text} ብር ተቀይሯል።")
-            update_group_board()
+            save_db_state(state); update_db_user(uid, {"step": ""})
+            bot.send_message(uid, f"✅ ዋጋ ተቀይሯል።"); update_group_board()
         except: bot.send_message(uid, "⚠️ ቁጥር ብቻ!")
 
     elif user['step'] == 'SET_PRIZES' and int(uid) == ADMIN_ID:
         try:
             p = [int(x.strip()) for x in message.text.split(',')]
             state['current_prizes'] = {"1": p[0], "2": p[1], "3": p[2]}
-            save_db_state(state)
-            update_db_user(uid, {"step": ""})
-            bot.send_message(uid, f"✅ ሽልማቶች ተቀምጠዋል!")
-        except: bot.send_message(uid, "⚠️ በኮማ ይለዩ!")
+            save_db_state(state); update_db_user(uid, {"step": ""})
+            bot.send_message(uid, f"✅ ሽልማቶች ተቀምጠዋል።")
+        except: bot.send_message(uid, "⚠️ ስህተት! በኮማ ይለዩ (100, 50, 20)")
+
+    elif message.text == "💸 ብር አውጣ (Withdraw)":
+        if user['wallet'] < 50:
+            bot.send_message(uid, "❌ ብር ለማውጣት ቢያንስ 50 ብር ያስፈልጋል።")
+        else:
+            update_db_user(uid, {"step": "WD_AMT"})
+            bot.send_message(uid, f"💰 ዋሌትዎ: {user['wallet']} ETB። ማውጣት የሚፈልጉትን መጠን ይጻፉ፦")
+
+    elif user['step'] == "WD_AMT":
+        try:
+            amt = float(message.text)
+            if amt > user['wallet'] or amt < 50: bot.send_message(uid, "❌ የተሳሳተ መጠን!")
+            else:
+                update_db_user(uid, {"temp_amt": amt, "step": "WD_BANK"})
+                bot.send_message(uid, "✅ አሁን ብሩ የሚላክበትን ባንክ እና ስም ይጻፉ፦")
+        except: bot.send_message(uid, "⚠️ ቁጥር ብቻ!")
+
+    elif user['step'] == "WD_BANK":
+        bot.send_message(ADMIN_ID, f"🏦 **Withdraw Request!**\n💰 መጠን: {user['temp_amt']} ETB\n👤 ባንክ: {message.text}\nID: `{uid}`")
+        update_db_user(uid, {"wallet": user['wallet'] - user['temp_amt'], "step": ""})
+        bot.send_message(uid, "✅ ጥያቄዎ ለአድሚን ደርሷል።")
 
     elif user['step'] == 'ASK_NAME':
         update_db_user(uid, {"display_name": message.text, "step": ""})
-        bot.send_message(uid, "✅ ስም ተመዝግቧል! አሁን ቁጥር ይምረጡ፦", reply_markup=get_number_markup())
+        bot.send_message(uid, "✅ ስም ተመዝግቧል! አሁን '🕹 ቁጥር ምረጥ' የሚለውን ይጫኑ።")
 
-    elif message.text == "💰 የኔ ዎሌት (Wallet)":
+    elif message.text == "🕹 ቁጥር ምረጥ":
+        if user['tickets'] <= 0: bot.send_message(uid, "❌ መጀመሪያ እጣ ይግዙ (ደረሰኝ ይላኩ)።")
+        else:
+            markup = telebot.types.InlineKeyboardMarkup(row_width=5)
+            btns = [telebot.types.InlineKeyboardButton(str(i), callback_data=f"n_{i}") for i in range(1, 101) if str(i) not in state['board']]
+            markup.add(*btns)
+            bot.send_message(uid, "ቁጥር ይምረጡ፦", reply_markup=markup)
+
+    elif message.text == "💰 Wallet":
         u = get_db_user(uid)
         bot.send_message(uid, f"📊 **መረጃ:**\n🎟 እጣ: {u['tickets']}\n💵 ዋሌት: {u['wallet']} ETB")
 
-    elif message.text == "🕹 ቁጥር ምረጥ":
-        if user['tickets'] <= 0: bot.send_message(uid, "❌ መጀመሪያ እጣ ይግዙ።")
-        else: bot.send_message(uid, "ቁጥር ይምረጡ፦", reply_markup=get_number_markup())
-
-# --- ANTI-SLEEP & FLASK ---
+# --- ANTI-SLEEP & SERVER ---
 @app.route('/')
-def home(): return "Fasil Lottery v24.0 Supabase Active! 🎰"
+def home(): return "Bot is Online! 🚀"
 
 def ping_self():
     while True:
         try:
-            time.sleep(600)
-            # እዚህ ጋር ሬንደር የሚሰጥህን ሊንክ ብታስገባ ቦቱ እንዳይዘጋ ያደርገዋል
+            time.sleep(600) # በየ 10 ደቂቃው
+            requests.get(RENDER_APP_URL)
         except: pass
 
 def run_flask():
