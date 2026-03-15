@@ -67,7 +67,6 @@ def refresh_group(bid, new=False):
 @bot.message_handler(commands=['start'])
 def welcome(m):
     uid = str(m.from_user.id)
-    # Wallet እዚህ ጋር ተጨምሯል
     if uid not in data["users"]: data["users"][uid] = {"tks": 0, "wallet": 0, "name": m.from_user.first_name, "step": "", "sel_bid": None}
     if "wallet" not in data["users"][uid]: data["users"][uid]["wallet"] = 0
     
@@ -96,22 +95,23 @@ def handle_calls(c):
         _, t_uid, amt, bid = c.data.split("_")
         price = data["boards"][bid]["price"]
         amt_val = float(amt)
-        
-        # ስሌት፦ እጣ እና ቀሪ ብር (Wallet)
         tks_to_add = int(amt_val // price)
         rem_money = amt_val % price
-        
         data["users"][t_uid]["tks"] += tks_to_add
         data["users"][t_uid]["wallet"] = data["users"][t_uid].get("wallet", 0) + rem_money
         data["users"][t_uid]["sel_bid"] = bid
         data["users"][t_uid]["step"] = "ASK_NAME"
-        
         msg = f"✅ ደረሰኝዎ ጸድቋል!\n🎫 {tks_to_add} እጣ ተሰጥቶዎታል።"
         if rem_money > 0: msg += f"\n💰 ቀሪ {rem_money} ETB ዋሌትዎ ላይ ተቀምጧል።"
         msg += "\n\nአሁን ስምዎን ይጻፉ፦"
-        
         bot.send_message(t_uid, msg)
         bot.delete_message(ADMIN_ID, c.message.message_id); save_db()
+
+    # አድሚኑ ብር እራሱ እንዲጽፍ የሚያደርግ ቁልፍ
+    elif c.data.startswith("manual_") and int(uid) == ADMIN_ID:
+        _, t_uid, bid = c.data.split("_")
+        data["users"][uid]["step"] = f"INPUT_AMT_{t_uid}_{bid}"
+        bot.send_message(ADMIN_ID, "✍️ እባክህ ለዚህ ደረሰኝ የሚመዘገበውን የብር መጠን በቁጥር ብቻ ጻፍ (ለምሳሌ፡ 100)፦")
 
     elif c.data.startswith("no_") and int(uid) == ADMIN_ID:
         t_uid = c.data.split("_")[1]
@@ -180,6 +180,26 @@ def handle_msgs(m):
     u = data["users"].get(uid)
     if not u: return
 
+    # አድሚኑ ብር ሲጽፍ መቀበያ
+    if u['step'].startswith("INPUT_AMT_") and int(uid) == ADMIN_ID:
+        _, _, t_uid, bid = u['step'].split("_")
+        try:
+            amt_val = float(m.text)
+            price = data["boards"][bid]["price"]
+            tks_to_add = int(amt_val // price)
+            rem_money = amt_val % price
+            data["users"][t_uid]["tks"] += tks_to_add
+            data["users"][t_uid]["wallet"] = data["users"][t_uid].get("wallet", 0) + rem_money
+            data["users"][t_uid]["sel_bid"] = bid
+            data["users"][t_uid]["step"] = "ASK_NAME"
+            u['step'] = ""
+            msg = f"✅ ደረሰኝዎ ጸድቋል!\n🎫 {tks_to_add} እጣ ተሰጥቶዎታል።"
+            if rem_money > 0: msg += f"\n💰 ቀሪ {rem_money} ETB ዋሌትዎ ላይ ተቀምጧል።"
+            bot.send_message(t_uid, msg + "\n\nአሁን ስምዎን ይጻፉ፦")
+            bot.send_message(ADMIN_ID, "✅ በተሳካ ሁኔታ ተመዝግቧል!"); save_db()
+        except: bot.send_message(ADMIN_ID, "⚠️ እባክህ ቁጥር ብቻ ጻፍ።")
+        return
+
     if u['step'].startswith("SET_PRICE_") and int(uid) == ADMIN_ID:
         bid = u['step'].split("_")[-1]
         try:
@@ -236,10 +256,8 @@ def handle_msgs(m):
         bid = u.get("sel_bid")
         if not bid: bot.send_message(uid, "⚠️ መጀመሪያ ሰሌዳ ይምረጡ (/start)"); return
         price = data["boards"][bid]["price"]
-        
         sent_amount = price 
         if m.text:
-            # የብር መጠኑን ለማንበብ (Transfer fee ያማከለ - \d+)
             amt_match = re.search(r"(\d+)", m.text)
             if amt_match: 
                 sent_amount = float(amt_match.group(1))
@@ -248,11 +266,11 @@ def handle_msgs(m):
         
         kb = telebot.types.InlineKeyboardMarkup()
         kb.add(telebot.types.InlineKeyboardButton("✅ አጽድቅ", callback_data=f"ok_{uid}_{sent_amount}_{bid}"),
+               telebot.types.InlineKeyboardButton("✅ በቁጥር አጽድቅ", callback_data=f"manual_{uid}_{bid}"),
                telebot.types.InlineKeyboardButton("❌ ውድቅ", callback_data=f"no_{uid}"))
         
         if m.content_type == 'photo': bot.send_photo(ADMIN_ID, m.photo[-1].file_id, caption=f"📩 ፎቶ ከ {m.from_user.first_name}\nሰሌዳ {bid}\nየተላከው ብር፡ {sent_amount}", reply_markup=kb)
         else: bot.send_message(ADMIN_ID, f"📩 SMS ከ {m.from_user.first_name}\nሰሌዳ {bid}\nየተላከው ብር፡ {sent_amount}\n`{m.text}`", reply_markup=kb, parse_mode="Markdown")
-        
         bot.send_message(uid, "📩 ደረሰኝዎ ደርሶናል! እባክዎን ከ 1 እስከ 5 ደቂቃ ባለው ጊዜ እስኪረጋገጥ ድረስ በትዕግስት ይታገሱን። 🙏")
 
 # --- 6. SERVER & POLLING ---
