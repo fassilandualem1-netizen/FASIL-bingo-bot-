@@ -2,63 +2,59 @@ import telebot
 import re
 import os
 import time
-import requests
 from flask import Flask
 from threading import Thread
 from supabase import create_client, Client
 
-# --- 1. SETUP (ቁጥሮቹ እንዳሉ በግልጽ) ---
+# --- SETUP ---
 TOKEN = '8721334129:AAEQQi1RtA6PKqTUg59sThJs6sRm_BnBr68'
 SUPABASE_URL = 'https://htdqqcrgzmyegpovnppi.supabase.co'
 SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh0ZHFxY3Jnem15ZWdwb3ZucHBpIiwicm9sZSI6Imh0ZHFxY3Jnem15ZWdwb3ZucHBpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0MjQyMTIsImV4cCI6MjA4OTAwMDIxMn0.JH76fJ_11H3zVQRxLAhqm1SphfZkb5IWqqfi3jnZTC0'
 
 GROUP_ID = -1003881429974        
 ADMIN_ID = 8488592165            
-RENDER_APP_URL = "https://fasil-bingo.onrender.com" 
 
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(TOKEN, threaded=False) # Threaded False ለ Render ይሻላል
 app = Flask(__name__)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- 2. DB HELPERS (የዳታቤዝ ስህተት እንዳይፈጠር) ---
+# --- DB HELPERS ---
 def get_db_state():
     try:
         res = supabase.table("game_state").select("value").eq("key", "current_game").execute()
-        if res.data and len(res.data) > 0:
-            return res.data[0]['value']
-        return {"price": 20, "board": {}, "board_msg_id": None}
-    except Exception:
-        return {"price": 20, "board": {}, "board_msg_id": None}
+        if res.data: return res.data[0]['value']
+    except: pass
+    return {"price": 20, "board": {}, "board_msg_id": None}
 
 def save_db_state(state):
-    supabase.table("game_state").update({"value": state}).eq("key", "current_game").execute()
+    try: supabase.table("game_state").update({"value": state}).eq("key", "current_game").execute()
+    except: pass
 
 def get_db_user(uid):
     uid = str(uid)
-    res = supabase.table("users").select("*").eq("id", uid).execute()
-    if not res.data:
-        new_user = {"id": uid, "wallet": 0, "tickets": 0, "display_name": "Player", "step": ""}
-        supabase.table("users").insert(new_user).execute()
-        return new_user
-    return res.data[0]
+    try:
+        res = supabase.table("users").select("*").eq("id", uid).execute()
+        if res.data: return res.data[0]
+        user = {"id": uid, "wallet": 0, "tickets": 0, "display_name": "Player", "step": ""}
+        supabase.table("users").insert(user).execute()
+        return user
+    except: return {"id": uid, "wallet": 0, "tickets": 0, "display_name": "Player", "step": ""}
 
-# --- 3. DESIGN DEPT (ሰሌዳው ከነ 🏆🏆🏆🙏👍 ምልክቱ) ---
+# --- DESIGN & UPDATE ---
 def generate_board_text():
     state = get_db_state()
     board = state.get('board', {})
     text = f"🎰 **የፋሲል ዕጣ ልዩ የዕድል ሰሌዳ** 🎰\n━━━━━━━━━━━━━\n"
-    text += f"💵 **መደብ:** `{state['price']} ETB` | 🏆 **እጣ**\n━━━━━━━━━━━━━\n"
-    
+    text += f"💵 **መደብ:** `{state.get('price', 20)} ETB` | 🏆 **እጣ**\n━━━━━━━━━━━━━\n"
     for i in range(1, 101):
         s_i = str(i)
         if s_i in board:
             name = board[s_i]['display_name'][:5]
-            text += f"{i:02d}.{name}🏆🏆🏆🙏👍 "
+            text += f"{i:02d}.{name}🏆🙏👍 "
         else:
             text += f"{i:02d}.⚪️ "
-        if i % 3 == 0: text += "\n" # ሰሌዳው እንዳይጨናነቅ በ 3 መስመር
-        
-    text += "\n━━━━━━━━━━━━━\n🕹 ለመሳተፍ @Fasil_assistant_bot"
+        if i % 3 == 0: text += "\n"
+    text += "\n━━━━━━━━━━━━━\n🕹 @Fasil_assistant_bot"
     return text
 
 def update_group_board():
@@ -71,12 +67,12 @@ def update_group_board():
             msg = bot.send_message(GROUP_ID, text, parse_mode="Markdown")
             state['board_msg_id'] = msg.message_id
             save_db_state(state)
-    except Exception:
+    except:
         msg = bot.send_message(GROUP_ID, text, parse_mode="Markdown")
         state['board_msg_id'] = msg.message_id
         save_db_state(state)
 
-# --- 4. ADMIN & CALLBACK (የማጽደቂያ ሎጂክ) ---
+# --- HANDLERS ---
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     uid = str(call.from_user.id)
@@ -84,23 +80,16 @@ def handle_callbacks(call):
     user = get_db_user(uid)
 
     if call.data.startswith("app_"):
-        _, t_uid, amt_str = call.data.split("_")
-        amt = float(amt_str)
-        num_tks = int(amt // state['price'])
-        change = amt % state['price']
-        
-        supabase.table("users").update({"tickets": num_tks, "wallet": change, "step": "ASK_NAME"}).eq("id", t_uid).execute()
-        bot.send_message(t_uid, f"✅ ደረሰኝዎ ጸድቋል! {num_tks} እጣ ተሰጥቶዎታል።\n\nሰሌዳ ላይ እንዲወጣ የሚፈልጉትን ስም ይጻፉ፦")
+        _, t_uid, amt = call.data.split("_")
+        num_tks = int(float(amt) // state.get('price', 20))
+        supabase.table("users").update({"tickets": num_tks, "step": "ASK_NAME"}).eq("id", t_uid).execute()
+        bot.send_message(t_uid, "✅ ጸድቋል! ስምዎን ይጻፉ፦")
         bot.delete_message(ADMIN_ID, call.message.message_id)
 
     elif call.data == "admin_reset" and int(uid) == ADMIN_ID:
         state['board'] = {}
         save_db_state(state); update_group_board()
-        bot.answer_callback_query(call.id, "♻️ ሰሌዳው ጸድቷል!")
-
-    elif call.data == "ask_price" and int(uid) == ADMIN_ID:
-        supabase.table("users").update({"step": "SET_PRICE"}).eq("id", uid).execute()
-        bot.send_message(uid, "💵 አዲሱን የመደብ ዋጋ በቁጥር ብቻ ይጻፉ፦")
+        bot.answer_callback_query(call.id, "ጸድቷል!")
 
     elif call.data.startswith("n_"):
         num = call.data.split("_")[1]
@@ -109,61 +98,51 @@ def handle_callbacks(call):
         save_db_state(state)
         supabase.table("users").update({"tickets": user['tickets'] - 1}).eq("id", uid).execute()
         update_group_board()
-        bot.answer_callback_query(call.id, f"✅ ቁጥር {num} ተይዟል!")
+        bot.answer_callback_query(call.id, f"ቁጥር {num} ተይዟል!")
 
-# --- 5. PRIVATE MESSAGE HANDLERS ---
-@bot.message_handler(func=lambda m: m.chat.type == 'private')
-def handle_private(message):
+@bot.message_handler(func=lambda m: True)
+def handle_all(message):
     uid = str(message.from_user.id)
     user = get_db_user(uid)
     state = get_db_state()
 
     if message.text == "/start":
-        welcome = (f"👋 **ሰላም {message.from_user.first_name}!**\n\n"
-                   f"📜 **ሕግጋት:**\n• ትክክለኛ የባንክ SMS ብቻ ይላኩ።\n\n"
-                   f"💰 **ክፍያ:**\n🔸 CBE: `1000584461757` \n🔸 Telebirr: `0951381356` \n\n"
-                   f"💵 **መደብ:** {state['price']} ብር\nደረሰኝዎን እዚህ ይላኩ 👇")
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add("🕹 ቁጥር ምረጥ", "💰 Wallet")
         if int(uid) == ADMIN_ID: markup.add("🛠 Admin Panel")
-        bot.send_message(uid, welcome, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(uid, f"ሰላም! መደብ: {state.get('price')} ብር። ደረሰኝ ይላኩ።", reply_markup=markup)
         return
 
     if message.text == "🛠 Admin Panel" and int(uid) == ADMIN_ID:
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("♻️ Reset Board", callback_data="admin_reset"))
-        markup.add(telebot.types.InlineKeyboardButton("💵 ዋጋ ቀይር", callback_data="ask_price"))
-        bot.send_message(uid, "🛠 **Admin Control Panel**", reply_markup=markup)
+        bot.send_message(uid, "Admin Panel", reply_markup=markup)
         return
 
     if user['step'] == 'ASK_NAME':
         supabase.table("users").update({"display_name": message.text, "step": ""}).eq("id", uid).execute()
-        bot.send_message(uid, "✅ ስም ተመዝግቧል! አሁን '🕹 ቁጥር ምረጥ' የሚለውን ተጭነው ቁጥር ይምረጡ።")
+        bot.send_message(uid, "ስም ተመዝግቧል! አሁን ቁጥር ይምረጡ።")
         return
 
-    if message.text == "🕹 ቁጥር ምረጥ":
-        if user['tickets'] <= 0: bot.send_message(uid, "❌ መጀመሪያ እጣ ይግዙ።")
-        else:
-            markup = telebot.types.InlineKeyboardMarkup(row_width=5)
-            btns = [telebot.types.InlineKeyboardButton(str(i), callback_data=f"n_{i}") for i in range(1, 101) if str(i) not in state['board']]
-            markup.add(*btns)
-            bot.send_message(uid, "ቁጥር ይምረጡ፦", reply_markup=markup)
-        return
-
-    # ደረሰኝ መቀበያ
-    if user['step'] == "":
+    # Receipt
+    if message.chat.type == 'private' and not message.text.startswith("/"):
         amt_match = re.search(r"(\d+)", message.text)
-        amt = amt_match.group(1) if amt_match else str(state['price'])
-        bot.send_message(uid, "📩 ደረሰኝዎ ደርሶናል። አድሚን እስኪያረጋግጥ ድረስ ይጠብቁ።")
+        amt = amt_match.group(1) if amt_match else "20"
+        bot.send_message(uid, "📩 ደረሰኝዎ ደርሷል፣ አድሚን እስኪያጸድቅ ይጠብቁ።")
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("✅ አጽድቅ", callback_data=f"app_{uid}_{amt}"))
-        bot.send_message(ADMIN_ID, f"📩 **አዲስ ደረሰኝ!**\n\n`{message.text}`", reply_markup=markup)
+        bot.send_message(ADMIN_ID, f"አዲስ ደረሰኝ: {message.text}", reply_markup=markup)
 
-# --- 6. SERVER ---
+# --- SERVER ---
 @app.route('/')
-def home(): return "Bot is Online! 🚀"
+def home(): return "OK"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
     bot.remove_webhook()
-    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))).start()
-    bot.infinity_polling()
+    Thread(target=run_flask).start()
+    print("Bot is starting...")
+    bot.infinity_polling(timeout=60, long_polling_timeout=60)
