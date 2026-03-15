@@ -1,12 +1,8 @@
-import telebot
-import re
-import os
-import json
-import time
+import telebot, re, os, json, time
 from flask import Flask
 from threading import Thread
 
-# --- 1. ዋና ቅንብሮች (Configuration) ---
+# --- SETUP ---
 TOKEN = '8721334129:AAEQQi1RtA6PKqTUg59sThJs6sRm_BnBr68'
 ADMIN_ID = 8488592165            
 GROUP_ID = -1003881429974        
@@ -15,163 +11,150 @@ DB_CHANNEL_ID = -1003747262103
 bot = telebot.TeleBot(TOKEN, threaded=False)
 app = Flask(__name__)
 
-# --- 2. ዳታ አያያዝ (Data Storage) ---
+# --- MULTI-BOARD DATA ---
 data = {
-    "game": {"price": 20, "board": {}, "msg_id": None, "prizes": [500, 300, 100], "db_msg_id": None},
+    "config": {"price": 20, "db_msg_id": None},
+    "boards": {
+        "1": {"name": "ሰሌዳ 1 (1-100)", "max": 100, "active": True, "slots": {}, "msg_id": None, "prizes": [500, 300, 100]},
+        "2": {"name": "ሰሌዳ 2 (1-50)", "max": 50, "active": False, "slots": {}, "msg_id": None, "prizes": [250, 150, 50]},
+        "3": {"name": "ሰሌዳ 3 (1-20)", "max": 20, "active": False, "slots": {}, "msg_id": None, "prizes": [100, 50, 20]}
+    },
     "users": {}
 }
 
-def load_db():
-    """መረጃን ከቻናሉ ላይ መጫኛ"""
-    try:
-        msgs = bot.get_chat_history(DB_CHANNEL_ID, limit=10)
-        for m in msgs:
-            if "💾 DB_STORAGE" in m.text:
-                json_str = m.text.replace("💾 DB_STORAGE", "").strip()
-                loaded = json.loads(json_str)
-                data["game"] = loaded["game"]
-                data["users"] = loaded["users"]
-                print("✅ Database Synchronized")
-                return
-    except: print("⚠️ Starting with fresh database")
-
+# --- DATABASE ENGINE ---
 def save_db():
-    """መረጃን ወደ ቻናሉ መላኪያ (Backup)"""
     try:
         payload = "💾 DB_STORAGE " + json.dumps(data)
-        db_id = data["game"].get("db_msg_id")
+        db_id = data["config"].get("db_msg_id")
         if db_id: bot.edit_message_text(payload, DB_CHANNEL_ID, db_id)
         else:
             m = bot.send_message(DB_CHANNEL_ID, payload)
-            data["game"]["db_msg_id"] = m.message_id
-    except: print("❌ Sync Error")
+            data["config"]["db_msg_id"] = m.message_id
+    except: pass
 
-# --- 3. የሰሌዳ ዲዛይን (Board Design) ---
-def draw_board():
-    g = data["game"]
-    b, p = g["board"], g["prizes"]
-    txt = f"🔥 **የፋሲል ዕጣ ልዩ የዕድል ሰሌዳ** 🔥\n"
-    txt += f"━━━━━━━━━━━━━━━━━━━━\n"
-    txt += f"💵 **መደብ:** `{g['price']} ETB` | 🎁 **ሽልማት:** `{sum(p)} ETB` \n"
-    txt += f"━━━━━━━━━━━━━━━━━━━━\n"
-    for i in range(1, 101):
+def load_db():
+    try:
+        msgs = bot.get_chat_history(DB_CHANNEL_ID, limit=5)
+        for m in msgs:
+            if "💾 DB_STORAGE" in m.text:
+                loaded = json.loads(m.text.replace("💾 DB_STORAGE", "").strip())
+                data.update(loaded); print("✅ Database Synced"); return
+    except: print("⚠️ Fresh Start")
+
+# --- DESIGN ENGINE ---
+def draw_board(bid):
+    b = data["boards"][bid]
+    status = "🟢 ክፍት" if b["active"] else "🔴 ተዘግቷል"
+    txt = f"🔥 **{b['name']}** {status}\n━━━━━━━━━━━━━\n"
+    txt += f"💵 **መደብ:** `{data['config']['price']} ETB` | 🎁 **ሽልማት:** `{sum(b['prizes'])}` \n━━━━━━━━━━━━━\n"
+    for i in range(1, b["max"] + 1):
         n = str(i)
-        if n in b: txt += f"{i:02d}.{b[n]['name'][:5]}🏆 "
-        else: txt += f"{i:02d}.⚪️ "
+        txt += f"{i:02d}.{b['slots'][n]['name'][:4]}🏆 " if n in b["slots"] else f"{i:02d}.⚪️ "
         if i % 3 == 0: txt += "\n"
-    txt += f"\n💰 **የሽልማት ዝርዝር፦**\n🥇 1ኛ: `{p[0]} ETB` | 🥈 2ኛ: `{p[1]} ETB` | 🥉 3ኛ: `{p[2]} ETB`\n"
-    txt += f"━━━━━━━━━━━━━━━━━━━━\n"
-    txt += f"🕹 ለመሳተፍ፦ @fasil_assistant_bot"
+    txt += f"\n💰 🥇{b['prizes'][0]} | 🥈{b['prizes'][1]} | 🥉{b['prizes'][2]}\n━━━━━━━━━━━━━\n🕹 @fasil_assistant_bot"
     return txt
 
-def refresh_group(new=False):
-    txt, g = draw_board(), data["game"]
+def refresh_group(bid, new=False):
+    b, txt = data["boards"][bid], draw_board(bid)
     try:
-        if new or not g["msg_id"]:
+        if new or not b["msg_id"]:
             m = bot.send_message(GROUP_ID, txt, parse_mode="Markdown")
-            g["msg_id"] = m.message_id
+            b["msg_id"] = m.message_id
             bot.pin_chat_message(GROUP_ID, m.message_id)
-        else: bot.edit_message_text(txt, GROUP_ID, g["msg_id"], parse_mode="Markdown")
+        else: bot.edit_message_text(txt, GROUP_ID, b["msg_id"], parse_mode="Markdown")
     except: pass
     save_db()
 
-# --- 4. መልዕክት ተቀባይ (Message Handlers) ---
+# --- HANDLERS ---
 @bot.message_handler(commands=['start'])
 def welcome(m):
     uid = str(m.from_user.id)
-    if uid not in data["users"]: data["users"][uid] = {"tks": 0, "name": m.from_user.first_name, "step": ""}
-    
-    welcome_msg = (
-        f"👋 **ሰላም {m.from_user.first_name}! እንኳን መጡ!** 🎰\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 **የአሁኑ መደብ:** `{data['game']['price']} ETB`\n"
-        f"🎫 **የእርስዎ ቀሪ እጣ:** `{data['users'][uid]['tks']} እጣ` \n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🏦 **የንግድ ባንክ (CBE):**\n`1000584461757` (ፋሲል)\n\n"
-        f"📱 **ቴሌብር (Telebirr):**\n`0951381356` \n\n"
-        f"📩 **ክፍያውን ከፈጸሙ በኋላ የደረሰኙን SMS እዚህ ይላኩ።**"
-    )
+    if uid not in data["users"]: data["users"][uid] = {"tks": 0, "name": m.from_user.first_name, "step": "", "sel_bid": None}
+    msg = f"👋 ሰላም {m.from_user.first_name}!\n🏦 CBE: `1000584461757` | Telebirr: `0951381356` \n📩 ደረሰኝ (SMS ወይም Photo) እዚህ ይላኩ።"
     kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.add("🕹 ቁጥር ምረጥ", "🎫 የእኔ እጣ")
     if int(uid) == ADMIN_ID: kb.add("🛠 Admin Panel")
-    bot.send_message(uid, welcome_msg, reply_markup=kb, parse_mode="Markdown")
+    bot.send_message(uid, msg, reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: True)
-def callbacks(c):
+def calls(c):
     uid = str(c.from_user.id)
     # ማጽደቅ
     if c.data.startswith("ok_"):
         _, t_uid, amt = c.data.split("_")
-        tks = int(float(amt) // data["game"]["price"])
+        tks = int(float(amt) // data["config"]["price"])
         if t_uid not in data["users"]: data["users"][t_uid] = {"tks": 0, "name": "Player", "step": ""}
         data["users"][t_uid]["tks"] += tks
         data["users"][t_uid]["step"] = "ASK_NAME"
-        bot.send_message(t_uid, f"✅ **ደረሰኝዎ ጸድቋል!** {tks} እጣ ተሰጥቶዎታል።\nእባክዎ ስምዎን ይጻፉ፦")
-        bot.delete_message(ADMIN_ID, c.message.message_id)
-        save_db()
-    # ውድቅ ማድረግ
-    elif c.data.startswith("no_"):
-        bot.send_message(c.data.split("_")[1], "❌ ደረሰኝዎ ውድቅ ተደርጓል። እባክዎ ትክክለኛ ደረሰኝ ይላኩ።")
-        bot.delete_message(ADMIN_ID, c.message.message_id)
+        bot.send_message(t_uid, f"✅ ጸድቋል! {tks} እጣ አለዎት። ስምዎን ይጻፉ፦")
+        bot.delete_message(ADMIN_ID, c.message.message_id); save_db()
+    # ሰሌዳ መምረጥ (ለተጫዋች)
+    elif c.data.startswith("sel_"):
+        bid = c.data.split("_")[1]
+        if data["boards"][bid]["active"]:
+            data["users"][uid]["sel_bid"] = bid
+            b = data["boards"][bid]
+            kb = telebot.types.InlineKeyboardMarkup(row_width=5)
+            btns = [telebot.types.InlineKeyboardButton(str(i), callback_data=f"n_{i}") for i in range(1, b["max"]+1) if str(i) not in b["slots"]]
+            kb.add(*btns)
+            bot.edit_message_text(f"🔢 {b['name']} ቁጥር ይምረጡ፦", uid, c.message.message_id, reply_markup=kb)
+        else: bot.answer_callback_query(c.id, "⚠️ ይሄ ሰሌዳ ለጊዜው ዝግ ነው!", show_alert=True)
     # ቁጥር መያዝ
     elif c.data.startswith("n_"):
+        bid = data["users"][uid]["sel_bid"]
         n = c.data.split("_")[1]
-        if data["users"][uid]["tks"] > 0:
-            data["game"]["board"][n] = {"name": data["users"][uid]["name"], "id": uid}
+        if data["users"][uid]["tks"] > 0 and bid:
+            data["boards"][bid]["slots"][n] = {"name": data["users"][uid]["name"], "id": uid}
             data["users"][uid]["tks"] -= 1
-            refresh_group()
+            refresh_group(bid)
             bot.answer_callback_query(c.id, f"✅ ቁጥር {n} ተይዟል!")
-        else: bot.answer_callback_query(c.id, "❌ ቀድመው እጣ ይግዙ!", show_alert=True)
-    # አድሚን ተግባራት
-    elif c.data == "adm_price": data["users"][uid]["step"] = "SET_PRICE"; bot.send_message(uid, "💰 አዲስ ዋጋ ይጻፉ፦")
-    elif c.data == "adm_prizes": data["users"][uid]["step"] = "SET_PRIZES"; bot.send_message(uid, "🏆 ሽልማቶችን በኮማ ይጻፉ (ምሳሌ: 500,300,100)፦")
-    elif c.data == "adm_reset":
-        data["game"]["board"] = {}
-        refresh_group(new=True)
-        bot.answer_callback_query(c.id, "♻️ ሰሌዳው ጸድቷል!")
+            bot.delete_message(uid, c.message.message_id)
+        else: bot.answer_callback_query(c.id, "❌ እጣ የለዎትም!", show_alert=True)
+    # አድሚን - On/Off
+    elif c.data.startswith("tog_"):
+        bid = c.data.split("_")[1]
+        data["boards"][bid]["active"] = not data["boards"][bid]["active"]
+        refresh_group(bid, new=True); save_db(); bot.answer_callback_query(c.id, "ተቀይሯል!")
 
-@bot.message_handler(func=lambda m: m.chat.type == 'private')
-def private_chats(m):
+@bot.message_handler(content_types=['text', 'photo'])
+def handle_all(m):
     uid = str(m.from_user.id)
-    u = data["users"].get(uid, {"tks": 0, "name": m.from_user.first_name, "step": ""})
-    
-    if u['step'] == "ASK_NAME":
-        u['name'] = m.text; u['step'] = ""; save_db()
-        bot.send_message(uid, f"✅ ተመዝግቧል! አሁን '🕹 ቁጥር ምረጥ' ይጫኑ።")
-    elif u['step'] == "SET_PRICE" and int(uid) == ADMIN_ID:
-        data["game"]["price"] = int(m.text); u['step'] = ""; save_db()
-        bot.send_message(uid, "✅ ዋጋ ተቀይሯል!")
-    elif u['step'] == "SET_PRIZES" and int(uid) == ADMIN_ID:
-        try:
-            data["game"]["prizes"] = [int(x.strip()) for x in m.text.split(',')]
-            u['step'] = ""; save_db(); refresh_group()
-            bot.send_message(uid, "✅ ሽልማት ተቀምጧል!")
-        except: bot.send_message(uid, "❌ ስህተት! (ምሳሌ: 500,300,100)")
-    
-    elif m.text == "🕹 ቁጥር ምረጥ":
-        if u['tks'] <= 0: bot.send_message(uid, "❌ መጀመሪያ እጣ ይግዙ።")
+    if uid not in data["users"]: data["users"][uid] = {"tks": 0, "name": m.from_user.first_name, "step": ""}
+    u = data["users"][uid]
+
+    if m.text == "🕹 ቁጥር ምረጥ":
+        if u['tks'] <= 0: bot.send_message(uid, "❌ እጣ የለዎትም።")
         else:
-            kb = telebot.types.InlineKeyboardMarkup(row_width=5)
-            kb.add(*[telebot.types.InlineKeyboardButton(str(i), callback_data=f"n_{i}") for i in range(1, 101) if str(i) not in data["game"]["board"]])
-            bot.send_message(uid, "🔢 ቁጥር ይምረጡ፦", reply_markup=kb)
-    elif m.text == "🎫 የእኔ እጣ":
-        bot.send_message(uid, f"👤 ስም: {u['name']}\n🎟 ቀሪ እጣ: {u['tks']}")
+            kb = telebot.types.InlineKeyboardMarkup(row_width=1)
+            for k, v in data["boards"].items():
+                status = "🟢" if v["active"] else "🔴"
+                kb.add(telebot.types.InlineKeyboardButton(f"{status} {v['name']}", callback_data=f"sel_{k}"))
+            bot.send_message(uid, "የትኛው ሰሌዳ ላይ መጫወት ይፈልጋሉ?", reply_markup=kb)
+
+    elif u['step'] == "ASK_NAME":
+        u['name'] = m.text; u['step'] = ""; save_db()
+        bot.send_message(uid, "✅ ተመዝግቧል! አሁን '🕹 ቁጥር ምረጥ' ይጫኑ።")
+
     elif m.text == "🛠 Admin Panel" and int(uid) == ADMIN_ID:
         kb = telebot.types.InlineKeyboardMarkup()
-        kb.add(telebot.types.InlineKeyboardButton("💵 ዋጋ ቀይር", callback_data="adm_price"), telebot.types.InlineKeyboardButton("🏆 ሽልማት ወስን", callback_data="adm_prizes"))
-        kb.add(telebot.types.InlineKeyboardButton("♻️ ሰሌዳ አጽዳ", callback_data="adm_reset"))
-        bot.send_message(uid, "🛠 Admin Panel", reply_markup=kb)
-    elif re.search(r"(FT|DCA|[0-9]{10})", m.text):
+        for k, v in data["boards"].items():
+            txt = f"On/Off {v['name']}"
+            kb.add(telebot.types.InlineKeyboardButton(txt, callback_data=f"tog_{k}"))
+        bot.send_message(uid, "🛠 የሰሌዳ መቆጣጠሪያ፦", reply_markup=kb)
+
+    # ደረሰኝ በፎቶ ወይም በጽሁፍ
+    elif m.content_type == 'photo' or re.search(r"(FT|DCA|[0-9]{10})", str(m.text)):
         kb = telebot.types.InlineKeyboardMarkup()
         kb.add(telebot.types.InlineKeyboardButton("✅ አጽድቅ", callback_data=f"ok_{uid}_20"), telebot.types.InlineKeyboardButton("❌ ውድቅ", callback_data=f"no_{uid}"))
-        bot.send_message(ADMIN_ID, f"📩 ደረሰኝ ከ {m.from_user.first_name}:\n`{m.text}`", reply_markup=kb, parse_mode="Markdown")
-        bot.send_message(uid, "📩 ደረሰኝ ተልኳል፣ እስኪረጋገጥ ይጠብቁ።")
+        if m.content_type == 'photo': bot.send_photo(ADMIN_ID, m.photo[-1].file_id, caption=f"📩 ፎቶ ደረሰኝ ከ {m.from_user.first_name}", reply_markup=kb)
+        else: bot.send_message(ADMIN_ID, f"📩 SMS ደረሰኝ ከ {m.from_user.first_name}:\n`{m.text}`", reply_markup=kb, parse_mode="Markdown")
+        bot.send_message(uid, "📩 ደረሰኝ ተልኳል፣ አድሚን እስኪያጸድቅ ይጠብቁ።")
 
-# --- 5. አጀማመር (Start Server) ---
+# --- SERVER ---
 @app.route('/')
-def home(): return "Bot Active"
+def home(): return "OK"
 
 if __name__ == "__main__":
-    load_db()
-    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))).start()
+    load_db(); Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))).start()
     bot.infinity_polling()
