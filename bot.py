@@ -15,9 +15,9 @@ app = Flask(__name__)
 data = {
     "config": {"db_msg_id": None},
     "boards": {
-        "1": {"name": "ሰሌዳ 1", "max": 100, "active": True, "slots": {}, "msg_id": None, "prizes": [500, 300, 100], "price": 20},
-        "2": {"name": "ሰሌዳ 2", "max": 50, "active": False, "slots": {}, "msg_id": None, "prizes": [250, 150, 50], "price": 10},
-        "3": {"name": "ሰሌዳ 3", "max": 25, "active": False, "slots": {}, "msg_id": None, "prizes": [100, 50, 20], "price": 5}
+        "1": {"name": "ሰሌዳ 1 (1-100)", "max": 100, "active": True, "slots": {}, "msg_id": None, "prizes": [500, 300, 100], "price": 20},
+        "2": {"name": "ሰሌዳ 2 (1-50)", "max": 50, "active": False, "slots": {}, "msg_id": None, "prizes": [250, 150, 50], "price": 10},
+        "3": {"name": "ሰሌዳ 3 (1-25)", "max": 25, "active": False, "slots": {}, "msg_id": None, "prizes": [100, 50, 20], "price": 5}
     },
     "users": {}
 }
@@ -251,8 +251,8 @@ def handle_msgs(m):
                telebot.types.InlineKeyboardButton("✅ በቁጥር አጽድቅ", callback_data=f"manual_{uid}_{bid}"),
                telebot.types.InlineKeyboardButton("❌ ውድቅ", callback_data=f"no_{uid}"))
         
-        if m.content_type == 'photo': bot.send_photo(ADMIN_ID, m.photo[-1].file_id, caption=f"📩 ፎቶ ከ {m.from_user.first_name}\nሰሌዳ {bid}\nየተላከው ብር፡ {sent_amount}", reply_markup=kb)
-        else: bot.send_message(ADMIN_ID, f"📩 SMS ከ {m.from_user.first_name}\nሰሌዳ {bid}\nየተላከው ብር፡ {sent_amount}\n`{m.text}`", reply_markup=kb, parse_mode="Markdown")
+        if m.content_type == 'photo': bot.send_photo(ADMIN_ID, m.photo[-1].file_id, caption=f"📩 ፎቶ ከ {m.from_user.first_name}\n{data['boards'][bid]['name']}\nየተላከው ብር፡ {sent_amount}", reply_markup=kb)
+        else: bot.send_message(ADMIN_ID, f"📩 SMS ከ {m.from_user.first_name}\n{data['boards'][bid]['name']}\nየተላከው ብር፡ {sent_amount}\n`{m.text}`", reply_markup=kb, parse_mode="Markdown")
         bot.send_message(uid, "📩 ደረሰኝዎ ደርሶናል! እባክዎን ከ 1 እስከ 5 ደቂቃ ባለው ጊዜ እስኪረጋገጥ ድረስ በትዕግስት ይታገሱን። 🙏")
 
 # --- 6. SERVER & POLLING ---
