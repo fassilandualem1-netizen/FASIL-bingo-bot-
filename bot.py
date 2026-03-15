@@ -67,7 +67,9 @@ def refresh_group(bid, new=False):
 @bot.message_handler(commands=['start'])
 def welcome(m):
     uid = str(m.from_user.id)
-    if uid not in data["users"]: data["users"][uid] = {"tks": 0, "name": m.from_user.first_name, "step": "", "sel_bid": None}
+    # Wallet እዚህ ጋር ተጨምሯል
+    if uid not in data["users"]: data["users"][uid] = {"tks": 0, "wallet": 0, "name": m.from_user.first_name, "step": "", "sel_bid": None}
+    if "wallet" not in data["users"][uid]: data["users"][uid]["wallet"] = 0
     
     kb = telebot.types.InlineKeyboardMarkup(row_width=1)
     for k, v in data["boards"].items():
@@ -93,12 +95,22 @@ def handle_calls(c):
     elif c.data.startswith("ok_") and int(uid) == ADMIN_ID:
         _, t_uid, amt, bid = c.data.split("_")
         price = data["boards"][bid]["price"]
-        # እዚህ ጋር ስሌቱን ይሰራዋል (አካፍሎ ሙሉ ቁጥሩን ይወስዳል)
-        tks_to_add = int(float(amt) // price)
+        amt_val = float(amt)
+        
+        # ስሌት፦ እጣ እና ቀሪ ብር (Wallet)
+        tks_to_add = int(amt_val // price)
+        rem_money = amt_val % price
+        
         data["users"][t_uid]["tks"] += tks_to_add
+        data["users"][t_uid]["wallet"] = data["users"][t_uid].get("wallet", 0) + rem_money
         data["users"][t_uid]["sel_bid"] = bid
         data["users"][t_uid]["step"] = "ASK_NAME"
-        bot.send_message(t_uid, f"✅ ደረሰኝዎ ጸድቋል! {tks_to_add} እጣ ተሰጥቶዎታል። አሁን ስምዎን ይጻፉ፦")
+        
+        msg = f"✅ ደረሰኝዎ ጸድቋል!\n🎫 {tks_to_add} እጣ ተሰጥቶዎታል።"
+        if rem_money > 0: msg += f"\n💰 ቀሪ {rem_money} ETB ዋሌትዎ ላይ ተቀምጧል።"
+        msg += "\n\nአሁን ስምዎን ይጻፉ፦"
+        
+        bot.send_message(t_uid, msg)
         bot.delete_message(ADMIN_ID, c.message.message_id); save_db()
 
     elif c.data.startswith("no_") and int(uid) == ADMIN_ID:
@@ -188,7 +200,8 @@ def handle_msgs(m):
         except: bot.send_message(uid, "⚠️ ስህተት! ምሳሌ፦ 500,300,100")
 
     elif m.text == "🎫 የእኔ እጣ":
-        msg = f"🎫 **የእርስዎ የዕጣ መረጃ**\n━━━━━━━━━━━━━\n👤 ስም፦ {u['name']}\n💰 ቀሪ እጣዎች፦ `{u['tks']}`\n\n"
+        u_wallet = u.get("wallet", 0)
+        msg = f"🎫 **የእርስዎ የዕጣ መረጃ**\n━━━━━━━━━━━━━\n👤 ስም፦ {u['name']}\n💰 ቀሪ እጣዎች፦ `{u['tks']}`\n💵 ዋሌት፦ `{u_wallet} ETB` \n━━━━━━━━━━━━━\n"
         found = False
         for bid, b in data["boards"].items():
             user_nums = [n for n, info in b["slots"].items() if info["id"] == uid]
@@ -219,14 +232,14 @@ def handle_msgs(m):
                telebot.types.InlineKeyboardButton("🟢/🔴 ሰሌዳ ክፈት/ዝጋ", callback_data="adm_toggle_main"))
         bot.send_message(uid, "🛠 **የአድሚን መቆጣጠሪያ ክፍል**", reply_markup=kb)
 
-    # --- ደረሰኝ መቀበያ እና ስሌት ---
     elif m.content_type == 'photo' or (m.text and re.search(r"(FT|DCA|[0-9]{10})", m.text)):
         bid = u.get("sel_bid")
         if not bid: bot.send_message(uid, "⚠️ መጀመሪያ ሰሌዳ ይምረጡ (/start)"); return
         price = data["boards"][bid]["price"]
         
-        sent_amount = price # በDefault መደቡን ይወስዳል
+        sent_amount = price 
         if m.text:
+            # የብር መጠኑን ለማንበብ (Transfer fee ያማከለ - \d+)
             amt_match = re.search(r"(\d+)", m.text)
             if amt_match: 
                 sent_amount = float(amt_match.group(1))
@@ -240,7 +253,6 @@ def handle_msgs(m):
         if m.content_type == 'photo': bot.send_photo(ADMIN_ID, m.photo[-1].file_id, caption=f"📩 ፎቶ ከ {m.from_user.first_name}\nሰሌዳ {bid}\nየተላከው ብር፡ {sent_amount}", reply_markup=kb)
         else: bot.send_message(ADMIN_ID, f"📩 SMS ከ {m.from_user.first_name}\nሰሌዳ {bid}\nየተላከው ብር፡ {sent_amount}\n`{m.text}`", reply_markup=kb, parse_mode="Markdown")
         
-        # አንተ የፈለግከው የመጠባበቂያ መልዕክት እዚህ ጋር ተጨምሯል
         bot.send_message(uid, "📩 ደረሰኝዎ ደርሶናል! እባክዎን ከ 1 እስከ 5 ደቂቃ ባለው ጊዜ እስኪረጋገጥ ድረስ በትዕግስት ይታገሱን። 🙏")
 
 # --- 6. SERVER & POLLING ---
