@@ -17,7 +17,7 @@ data = {
     "boards": {
         "1": {"name": "ሰሌዳ 1 (1-100)", "max": 100, "active": True, "slots": {}, "msg_id": None, "prizes": [500, 300, 100], "price": 20},
         "2": {"name": "ሰሌዳ 2 (1-50)", "max": 50, "active": False, "slots": {}, "msg_id": None, "prizes": [250, 150, 50], "price": 10},
-        "3": {"name": "ሰሌዳ 3 (1-20)", "max": 20, "active": False, "slots": {}, "msg_id": None, "prizes": [100, 50, 20], "price": 5}
+        "3": {"name": "ሰሌዳ 3 (1-25)", "max": 20, "active": False, "slots": {}, "msg_id": None, "prizes": [100, 50, 20], "price": 5}
     },
     "users": {}
 }
