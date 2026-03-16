@@ -1,66 +1,32 @@
-# --- የ Wallet እና የቁጥር ምርጫ Logic ማሻሻያ ---
+# --- 3. DATABASE ENGINE (FIXED) ---
+def load_db():
+    try:
+        # በ DB_CHANNEL_ID ውስጥ ያሉትን የቅርብ መልእክቶች ለማግኘት 
+        # ማሳሰቢያ፡ telebot በራሱ get_chat_history የለውም። 
+        # እንደ አማራጭ ዳታውን ፋይል ላይ ማስቀመጥ ወይም የቅርብ ጊዜ መልእክትን በ ID መፈለግ ይቻላል።
+        # ለጊዜው በ ID: 1 ጀምሮ ለመፈለግ እንዲህ ማድረግ ትችላለህ (ወይም ፒን የተደረገውን ተጠቀም)
+        curr_chat = bot.get_chat(DB_CHANNEL_ID)
+        if curr_chat.pinned_message and "💾 DB_STORAGE" in curr_chat.pinned_message.text:
+            m_text = curr_chat.pinned_message.text
+            loaded = json.loads(m_text.replace("💾 DB_STORAGE", "").strip())
+            data.update(loaded)
+            return True
+    except Exception as e:
+        print(f"Load DB Error: {e}")
+    return False
 
-@bot.callback_query_handler(func=lambda c: True)
-def handle_calls(c):
-    uid = str(c.from_user.id)
-    u = data["users"].get(uid)
-
-    # 1. አድሚኑ ደረሰኝ ሲያጸድቅ (ብሩን ዋሌት ላይ ብቻ መጨመር)
-    if c.data.startswith("ok_") and int(uid) == ADMIN_ID:
-        _, t_uid, amt, bid = c.data.split("_")
-        amt_val = float(amt)
-        
-        # ብሩን በቀጥታ ዋሌት ላይ መደመር (እጣ ወዲያው አንሰጥም)
-        data["users"][t_uid]["wallet"] = data["users"][t_uid].get("wallet", 0) + amt_val
-        data["users"][t_uid]["step"] = "ASK_NAME" if not data["users"][t_uid].get("name") else ""
-        
-        msg = f"✅ ደረሰኝዎ ጸድቋል!\n💰 {amt_val} ETB ዋሌትዎ ላይ ተጨምሯል።\n"
-        msg += "አሁን '🕹 ቁጥር ምረጥ' የሚለውን በመጫን መጫወት ይችላሉ።"
-        
-        bot.send_message(t_uid, msg)
-        bot.delete_message(ADMIN_ID, c.message.message_id)
-        save_db()
-
-    # 2. ቁጥር ሲመረጥ (ከዋሌት ላይ ቀንሶ እጣ መስጠት)
-    elif c.data.startswith("n_"):
-        bid = u.get("sel_bid")
-        if not bid:
-            bot.answer_callback_query(c.id, "⚠️ እባክህ መጀመሪያ ሰሌዳ ምረጥ!", show_alert=True)
-            return
-            
-        b = data["boards"][bid]
-        price = b["price"]
-        n = c.data.split("_")[1]
-
-        # ዋሌቱን ቼክ ማድረግ
-        if u.get("wallet", 0) >= price:
-            if n not in b["slots"]:
-                # ብር መቀነስ
-                u["wallet"] -= price
-                # ቁጥሩን መመዝገብ
-                b["slots"][n] = {"name": u["name"], "id": uid}
-                
-                refresh_group(bid)
-                bot.answer_callback_query(c.id, f"✅ ቁጥር {n} ተመርጧል! {price} ETB ከዋሌትዎ ተቀንሷል።")
-                
-                # የቁጥር መምረጫውን ዝጋው ወይም አድሰው
-                bot.delete_message(uid, c.message.message_id)
-                save_db()
-            else:
-                bot.answer_callback_query(c.id, "⚠️ ይቅርታ፣ ይህ ቁጥር ተይዟል!", show_alert=True)
-        else:
-            bot.answer_callback_query(c.id, f"❌ በቂ ብር የለዎትም! የሰሌዳው ዋጋ {price} ETB ነው።", show_alert=True)
-
-# --- UI ማሻሻያ (Reply Keyboard ላይ የዋሌት በተን መጨመር) ---
-@bot.message_handler(commands=['start'])
-def welcome(m):
+# --- 5. HANDLERS (FIXED) ---
+@bot.message_handler(content_types=['text', 'photo'])
+def handle_msgs(m):
     uid = str(m.from_user.id)
-    if uid not in data["users"]: 
-        data["users"][uid] = {"wallet": 0, "name": m.from_user.first_name, "step": "", "sel_bid": None, "tks": 0}
+    # ተጠቃሚው ከዚህ በፊት በ /start ካልተመዘገበ እዚህ ጋር ይመዝገብ
+    if uid not in data["users"]:
+        data["users"][uid] = {"tks": 0, "wallet": 0, "name": m.from_user.first_name, "step": "", "sel_bid": None}
     
-    main_kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    # እዚህ ጋር "💰 ዋሌት" የሚል በተን ጨምረናል
-    main_kb.add("🕹 ቁጥር ምረጥ", "💰 ዋሌትና መረጃ", "🎫 የእኔ እጣ")
-    if int(uid) == ADMIN_ID: main_kb.add("🛠 Admin Panel")
+    u = data["users"][uid]
     
-    bot.send_message(uid, "🌟 **እንኳን ወደ ፋሲል ልዩ ዕጣ በሰላም መጡ!** 🌟", reply_markup=main_kb, parse_mode="Markdown")
+    # የ step ደህንነት (None check)
+    current_step = u.get('step', "")
+
+    if current_step.startswith("INPUT_AMT_") and int(uid) == ADMIN_ID:
+        # ... የተቀረው ኮድህ
