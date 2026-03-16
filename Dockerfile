@@ -1,23 +1,17 @@
-# 1. ትንሽ እና ፈጣን የሆነ የፓይዘን ምስል
-FROM python:3.10-slim
+# የ Python ስሪት
+FROM python:3.9-slim
 
-# 2. የስራ ቦታ (Folder) መፍጠር
+# በኮንቴይነሩ ውስጥ ፋይሎች የሚቀመጡበት ቦታ
 WORKDIR /app
 
-# 3. ለፈጣን ስራ የሚያስፈልጉ ሲስተም ላይብረሪዎች
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# 4. requirements.txt መጫን
+# አስፈላጊ የሆኑ ፋይሎችን መቅዳት
 COPY requirements.txt .
+
+# ላይብረሪዎችን መጫን
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. ሁሉንም ፋይሎች ኮፒ ማድረግ
+# ሙሉውን ኮድ መቅዳት
 COPY . .
 
-# 6. ፖርት መክፈት
-EXPOSE 8080
-
-# 7. ቦቱን ማስነሳት (የፋይሉ ስም bot.py ስለሆነ)
+# ቦቱን ማስነሳት
 CMD ["python", "bot.py"]
